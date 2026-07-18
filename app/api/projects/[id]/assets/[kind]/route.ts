@@ -1,0 +1,4 @@
+import { env } from "cloudflare:workers";
+function key(id:string,kind:string){return kind==="drawing"?"projects/"+id+"/drawing.png":kind==="photo"?"projects/"+id+"/photo.jpg":null;}
+export async function GET(_:Request,c:{params:Promise<{id:string;kind:string}>}){const {id,kind}=await c.params,k=key(id,kind);if(!k)return new Response("Ongeldig bestand",{status:400});const o=await env.STORAGE.get(k);if(!o)return new Response("Niet gevonden",{status:404});return new Response(o.body,{headers:{"Content-Type":o.httpMetadata?.contentType??"application/octet-stream","Cache-Control":"private, max-age=60"}});}
+export async function PUT(request:Request,c:{params:Promise<{id:string;kind:string}>}){const {id,kind}=await c.params,k=key(id,kind);if(!k)return new Response("Ongeldig bestand",{status:400});await env.STORAGE.put(k,request.body,{httpMetadata:{contentType:request.headers.get("content-type")??"application/octet-stream"}});return Response.json({ok:true});}

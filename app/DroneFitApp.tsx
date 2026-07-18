@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as exifr from "exifr";
 import "leaflet/dist/leaflet.css";
+import type { ProjectRecord } from "./ProjectPortal";
 
 type SitePosition = { lat: number; lon: number };
 type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
@@ -45,30 +46,32 @@ function formatNumber(value: number | null, digits = 2) {
   return value == null ? "â€”" : value.toFixed(digits);
 }
 
-export default function DroneFitApp() {
+export default function DroneFitApp({ project, onBack }: { project: ProjectRecord; onBack: () => void }) {
+  let saved: any = {};
+  try { saved = JSON.parse(project.stateJson || "{}"); } catch { saved = {}; }
   const mapElement = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
   const mapLeaflet = useRef<any>(null);
   const markerLayer = useRef<any>(null);
   const drawingLayer = useRef<any>(null);
 
-  const [projectName, setProjectName] = useState("Tuiterd Holten");
-  const [site, setSite] = useState<SitePosition>(INITIAL_SITE);
-  const [siteConfirmed, setSiteConfirmed] = useState(false);
-  const [drawingName, setDrawingName] = useState("");
-  const [drawingImage, setDrawingImage] = useState("");
-  const [drawingAspect, setDrawingAspect] = useState(1.414);
-  const [drawingWidth, setDrawingWidth] = useState(180);
-  const [drawingRotation, setDrawingRotation] = useState(0);
-  const [drawingOpacity, setDrawingOpacity] = useState(0.58);
-  const [drone, setDrone] = useState<DroneData | null>(null);
+  const [projectName, setProjectName] = useState(saved.projectName || project.name);
+  const [site, setSite] = useState<SitePosition>(saved.site || INITIAL_SITE);
+  const [siteConfirmed, setSiteConfirmed] = useState(Boolean(saved.siteConfirmed));
+  const [drawingName, setDrawingName] = useState(saved.drawingName || "");
+  const [drawingImage, setDrawingImage] = useState(saved.hasDrawing ? "/api/projects/" + project.id + "/assets/drawing" : "");
+  const [drawingAspect, setDrawingAspect] = useState(saved.drawingAspect || 1.414);
+  const [drawingWidth, setDrawingWidth] = useState(saved.drawingWidth || 180);
+  const [drawingRotation, setDrawingRotation] = useState(saved.drawingRotation || 0);
+  const [drawingOpacity, setDrawingOpacity] = useState(saved.drawingOpacity || 0.58);
+  const [drone, setDrone] = useState<DroneData | null>(saved.drone ? { ...saved.drone, previewUrl: "/api/projects/" + project.id + "/assets/photo" } : null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("Zoek een adres of klik op de projectlocatie in de kaart.");
   const [addressQuery, setAddressQuery] = useState("");
   const [addressResults, setAddressResults] = useState<AddressResult[]>([]);
   const [addressBusy, setAddressBusy] = useState(false);
   const [activeAddress, setActiveAddress] = useState(-1);
-  const [buildings, setBuildings] = useState<BuildingBlock[]>([]);
+  const [buildings, setBuildings] = useState<BuildingBlock[]>(saved.buildings || []);
   const [buildingType, setBuildingType] = useState("Tweekapper 1");
   const [placingBuilding, setPlacingBuilding] = useState(false);
   const placingBuildingRef = useRef(false);
@@ -76,6 +79,15 @@ export default function DroneFitApp() {
 
   useEffect(() => { placingBuildingRef.current = placingBuilding; }, [placingBuilding]);
   useEffect(() => { buildingTypeRef.current = buildingType; }, [buildingType]);
+  const [saveState, setSaveState] = useState("Opgeslagen");
+  async function saveProject() {
+    setSaveState("Opslaan...");
+    const safeDrone = drone ? { ...drone, previewUrl: "" } : null;
+    const state = { projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, hasDrawing: Boolean(drawingName), drone: safeDrone, buildings };
+    const response = await fetch("/api/projects/" + project.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: project.code, name: projectName, state }) });
+    setSaveState(response.ok ? "Opgeslagen" : "Opslaan mislukt");
+  }
+  useEffect(() => { const timer = window.setTimeout(saveProject, 1200); return () => window.clearTimeout(timer); }, [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drone, buildings]);
 
   useEffect(() => {
     const query = addressQuery.trim();
@@ -243,6 +255,8 @@ export default function DroneFitApp() {
       if (!context) throw new Error("Canvas kon niet worden aangemaakt");
       await page.render({ canvas, canvasContext: context, viewport }).promise;
       setDrawingName(file.name); setDrawingAspect(viewport.width / viewport.height); setDrawingImage(canvas.toDataURL("image/png"));
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (blob) await fetch("/api/projects/" + project.id + "/assets/drawing", { method: "PUT", headers: { "Content-Type": "image/png" }, body: blob });
       setNotice("Situatietekening geladen. Stel schaal, rotatie en dekking af op de luchtfoto.");
     } catch (error) {
       setNotice(`PDF kon niet worden geladen: ${error instanceof Error ? error.message : "onbekende fout"}`);
@@ -255,6 +269,7 @@ export default function DroneFitApp() {
     setBusy("DJI-metadata uitlezenâ€¦");
     try {
       const buffer = await file.arrayBuffer();
+      await fetch("/api/projects/" + project.id + "/assets/photo", { method: "PUT", headers: { "Content-Type": file.type || "image/jpeg" }, body: file });
       const tags: any = await exifr.parse(buffer, { gps: true, tiff: true, exif: true, xmp: true, translateValues: true });
       const raw = new TextDecoder("latin1").decode(buffer);
       const bitmap = await createImageBitmap(file);
@@ -313,9 +328,9 @@ export default function DroneFitApp() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">D</span><span>DroneFit</span><small>vastgoed camera matching</small></div>
+        <div className="brand"><button className="back-projects" onClick={onBack}>Projecten</button><span className="brand-mark">D</span><span>DroneFit</span><small>{project.code}</small></div>
         <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-        <div className="top-actions"><span className="crs-chip">RD + NAP Â· EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
+        <div className="top-actions"><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD + NAP Â· EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
       </header>
       <section className="workspace">
         <aside className="sidebar">
