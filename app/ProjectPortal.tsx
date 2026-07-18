@@ -19,25 +19,25 @@ export default function ProjectPortal(){
   </header>
   <section className="xdf-hero" id="top">
    <div className="xdf-copy"><span className="xdf-kicker"><i/>Camera matching voor vastgoed</span><h1>Van dronefoto naar <em>overtuigende render.</em></h1><p>Positioneer nieuwbouw exact in de echte omgeving. xDroneFit koppelt locatie, situatietekening en DJI-camera aan jouw Blender-model.</p><div className="xdf-actions"><a className="xdf-button" href="#projecten">Start een project <span>+</span></a><a className="xdf-textlink" href="#werkwijze">Bekijk hoe het werkt <span>↘</span></a></div><div className="xdf-proof"><strong>RD + NAP</strong><span>Exacte positie</span><strong>DJI EXIF</strong><span>Camera automatisch</span><strong>BLENDER</strong><span>Renderklaar export</span></div></div>
-   <div className="xdf-demo" aria-label="Animatie van kaart naar ingepaste vastgoedrender">
-    <div className="demo-head"><div className="demo-window-dots"><i/><i/><i/></div><span>xDRONEFIT / LIVE MATCH</span><b>SX26259 · HOLTEN</b><em><i/>LIVE</em></div>
-    <div className="demo-canvas">
-     <div className="demo-photo"/>
-     <div className="demo-atmosphere"/><div className="demo-scan"/>
-     <div className="demo-address"><i>⌖</i><span><small>LOCATIE GEVONDEN</small>Tuitert, Holten</span><b>RD</b></div>
-     <div className="demo-plan-import"><i>PDF</i><span><small>SITUATIEKAART INLADEN</small>situatie_Tuitert.pdf</span><b><em/></b></div>
-     <div className="demo-site"><i/><i/><i/><i/><span>SITUATIE.PDF</span></div>
-     <div className="demo-camera"><BrandMark small/><span><small>DJI FC9313</small>9 mm · 72.4 m NAP</span><b>GPS</b></div>
-     <div className="demo-frustum"/><div className="demo-target"><i/><b/></div>
-     <div className="demo-context-wire"><div className="ctx ctx-a"/><div className="ctx ctx-b"/><div className="ctx ctx-c"/><div className="ctx ctx-d"/><div className="ctx ctx-e"/><div className="ctx ctx-f"/><div className="ctx ctx-g"/><span>REFERENTIEGEOMETRIE · 3D BAG / AHN</span><i/></div>
-     <div className="demo-massing">
-      <div className="mass mass-a"><i/><b/><span/></div><div className="mass mass-b"><i/><b/><span/></div><div className="mass mass-c"><i/><b/><span/></div><div className="mass mass-d"><i/><b/><span/></div>
-     </div>
-     <div className="demo-render-reveal"/><div className="demo-reveal-line"><i/></div>
-     <div className="demo-match"><span><i>✓</i><small>CAMERA MATCH</small><strong>Renderklaar</strong></span><b>99.4<small>%</small></b></div>
-     <div className="demo-coordinates">X 228.491,62&nbsp;&nbsp; Y 479.302,18&nbsp;&nbsp; Z +12,40</div>
+   <div className="xdf-demo xdf-process-demo" aria-label="Overzicht van de xDroneFit-projectflow">
+    <div className="process-head"><div className="demo-window-dots"><i/><i/><i/></div><span>xDRONEFIT / PROJECTFLOW</span><b>SX26259 · TUITERT HOLTEN</b><em><i/>OPGESLAGEN</em></div>
+    <div className="process-shell">
+     <aside className="process-nav" aria-label="Projectstappen"><small>PROJECTSETUP</small><ol><li><i>01</i><span>Locatie<small>Adres en RD</small></span><b>✓</b></li><li><i>02</i><span>Situatiekaart<small>PDF uitlijnen</small></span><b>✓</b></li><li><i>03</i><span>Dronefoto<small>DJI metadata</small></span><b>✓</b></li><li><i>04</i><span>Referenties<small>Omgeving koppelen</small></span><em/></li><li><i>05</i><span>3D-model<small>Blender-bestand</small></span></li><li><i>06</i><span>Export<small>Renderklaar</small></span></li></ol></aside>
+     <section className="process-workspace">
+      <div className="process-title"><span><small>ACTIEF PROJECT</small><strong>Camera matching voorbereiden</strong></span><b>4 <small>/ 6</small></b></div>
+      <div className="process-files">
+       <article><i className="file-map">⌖</i><span><small>LOCATIE</small><strong>Tuitert, Holten</strong><em>RD 228491 · 479302</em></span><b>Gekoppeld</b></article>
+       <article><i className="file-pdf">PDF</i><span><small>SITUATIEKAART</small><strong>Situatie_Tuitert.pdf</strong><em>4,8 MB · schaal controleren</em></span><b>Ingeladen</b></article>
+       <article><i className="file-dji">DJI</i><span><small>DRONEFOTO</small><strong>DJI_0065_D.JPG</strong><em>8192 × 6144 · FC9313</em></span><b>Metadata gereed</b></article>
+      </div>
+      <div className="process-solve">
+       <div className="solve-copy"><span><i/>VOLGENDE STAP</span><h3>Referentiepunten koppelen</h3><p>Gebruik herkenbare punten uit kaart, omgeving en foto om de camera betrouwbaar op te lossen.</p><div className="solve-chips"><i>3D BAG</i><i>AHN</i><i>DJI EXIF</i></div></div>
+       <div className="solve-meter" aria-hidden="true"><div className="meter-ring"><span>04</span><i/><i/><i/></div><small>INVOER CONTROLEREN</small></div>
+      </div>
+      <div className="process-output"><span><i/>WONINGEN.BLEND</span><div><i/><i/><i/><i/></div><button type="button" tabIndex={-1}>Naar cameramatch <b>→</b></button></div>
+     </section>
     </div>
-    <div className="demo-timeline" id="werkwijze"><div className="demo-progress"/><span><i>01</i>Locatie</span><span><i>02</i>Situatie PDF</span><span><i>03</i>Omgevingsscan</span><span><i>04</i>Camera solve</span><span><i>05</i>Woningen</span><span><i>06</i>Render</span></div>
+    <div className="process-foot" id="werkwijze"><span><i/>3 bronnen gekoppeld</span><span>Geen automatische plaatsing zonder controle</span><b>PROJECT WORDT AUTOMATISCH OPGESLAGEN</b></div>
    </div>
   </section>
   <section className="xdf-flow"><span>01 <b>Zoek de locatie</b></span><span>02 <b>Laad de situatiekaart</b></span><span>03 <b>Scan referentiegebouwen</b></span><span>04 <b>Los de DJI-camera op</b></span><span>05 <b>Plaats de woningen</b></span><span>06 <b>Render in Blender</b></span></section>
