@@ -337,7 +337,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           <div className="progress-line">
             {["Locatie", "Situatie", "Dronefoto", "Woningen", "Camera-match"].map((label, index) => (
               <div className={`progress-step ${completedSteps[index] ? "done" : index === activeStep ? "active" : ""}`} key={label}>
-                <span>{completedSteps[index] ? "✓" : index + 1}</span><b>{label}</b>
+                <span className={completedSteps[index] ? "step-check" : ""} aria-label={completedSteps[index] ? "Voltooid" : `Stap ${index + 1}`}>{completedSteps[index] ? null : index + 1}</span><b>{label}</b>
               </div>
             ))}
           </div>

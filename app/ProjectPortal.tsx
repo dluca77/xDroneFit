@@ -6,6 +6,20 @@ function BrandMark({small=false}:{small?:boolean}){return <span className={small
 export default function ProjectPortal(){
  const [projects,setProjects]=useState<ProjectRecord[]>([]),[current,setCurrent]=useState<ProjectRecord|null>(null),[loading,setLoading]=useState(true),[code,setCode]=useState("SX26259"),[name,setName]=useState("Tuiterd Holten"),[query,setQuery]=useState(""),[error,setError]=useState("");
  async function refresh(){setLoading(true);try{const r=await fetch("/api/projects");if(r.ok)setProjects(await r.json())}finally{setLoading(false)}}
+ useEffect(()=>{
+  if("scrollRestoration" in window.history) window.history.scrollRestoration="manual";
+  const previousScrollBehavior=document.documentElement.style.scrollBehavior;
+  document.documentElement.style.scrollBehavior="auto";
+  const resetScroll=()=>{
+   if(!current && window.location.hash) window.history.replaceState(null,"",window.location.pathname+window.location.search);
+   window.scrollTo(0,0);
+  };
+  resetScroll();
+  const frame=window.requestAnimationFrame(resetScroll);
+  const timer=window.setTimeout(resetScroll,80);
+  window.addEventListener("pageshow",resetScroll);
+  return()=>{document.documentElement.style.scrollBehavior=previousScrollBehavior;window.cancelAnimationFrame(frame);window.clearTimeout(timer);window.removeEventListener("pageshow",resetScroll)};
+ },[current]);
  useEffect(()=>{refresh()},[]);
  async function create(e:FormEvent){e.preventDefault();setError("");const r=await fetch("/api/projects",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code,name,state:{projectName:name,site:{lat:52.282539407,lon:6.426162461},siteConfirmed:false,buildings:[]}})});const data=await r.json();if(!r.ok){setError(data.error??"Project kon niet worden gemaakt.");return}setCurrent(data);setProjects(p=>[data,...p])}
  async function remove(p:ProjectRecord){if(!confirm(p.code+" - "+p.name+" verwijderen?"))return;await fetch("/api/projects/"+p.id,{method:"DELETE"});setProjects(v=>v.filter(x=>x.id!==p.id))}
@@ -22,7 +36,7 @@ export default function ProjectPortal(){
    <div className="xdf-demo xdf-process-demo" aria-label="Overzicht van de xDroneFit-projectflow">
     <div className="process-head"><div className="demo-window-dots"><i/><i/><i/></div><span>xDRONEFIT / PROJECTFLOW</span><b>SX26259 · TUITERT HOLTEN</b><em><i/>OPGESLAGEN</em></div>
     <div className="process-shell">
-     <aside className="process-nav" aria-label="Projectstappen"><small>PROJECTSETUP</small><ol><li><i>01</i><span>Locatie<small>Adres en RD</small></span><b>✓</b></li><li><i>02</i><span>Situatiekaart<small>PDF uitlijnen</small></span><b>✓</b></li><li><i>03</i><span>Dronefoto<small>DJI metadata</small></span><b>✓</b></li><li><i>04</i><span>Referenties<small>Omgeving koppelen</small></span><em/></li><li><i>05</i><span>3D-model<small>Blender-bestand</small></span></li><li><i>06</i><span>Export<small>Renderklaar</small></span></li></ol></aside>
+     <aside className="process-nav" aria-label="Projectstappen"><small>PROJECTSETUP</small><ol><li><i>01</i><span>Locatie<small>Adres en RD</small></span><b className="process-check" aria-label="Voltooid"/></li><li><i>02</i><span>Situatiekaart<small>PDF uitlijnen</small></span><b className="process-check" aria-label="Voltooid"/></li><li><i>03</i><span>Dronefoto<small>DJI metadata</small></span><b className="process-check" aria-label="Voltooid"/></li><li><i>04</i><span>Referenties<small>Omgeving koppelen</small></span><em/></li><li><i>05</i><span>3D-model<small>Blender-bestand</small></span></li><li><i>06</i><span>Export<small>Renderklaar</small></span></li></ol></aside>
      <section className="process-workspace">
       <div className="process-title"><span><small>ACTIEF PROJECT</small><strong>Camera matching voorbereiden</strong></span><b>4 <small>/ 6</small></b></div>
       <div className="process-files">
