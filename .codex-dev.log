@@ -1,9 +1,0 @@
-
-  vinext dev  (Vite 8.0.13)
-
-Unable to fetch the `Request.cf` object! Falling back to a default placeholder...
-AggregateError [EACCES]: 
-    at internalConnectMultiple (node:net:1142:49)
-    at afterConnectMultiple (node:net:1723:7)
-  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3000[22m/[39m
-  [32m➜[39m  [1mDebug[22m:   [2m[33mhttp://localhost:[1m3000[22m[2m/__debug[39m[22m
