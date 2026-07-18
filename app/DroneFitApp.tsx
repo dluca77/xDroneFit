@@ -1,0 +1,284 @@
+﻿"use client";
+
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import * as exifr from "exifr";
+import "leaflet/dist/leaflet.css";
+
+type SitePosition = { lat: number; lon: number };
+type DroneData = {
+  fileName: string; previewUrl: string;
+  latitude: number | null; longitude: number | null;
+  relativeAltitude: number | null; absoluteAltitude: number | null;
+  gimbalYaw: number | null; gimbalPitch: number | null; gimbalRoll: number | null;
+  flightYaw: number | null; focalLength: number | null; focalLength35mm: number | null;
+  width: number | null; height: number | null;
+  cameraMake: string; cameraModel: string; capturedAt: string;
+};
+
+const INITIAL_SITE: SitePosition = { lat: 52.282539407, lon: 6.426162461 };
+
+function readDjiAttribute(raw: string, name: string): number | null {
+  const match = raw.match(new RegExp(`drone-dji:${name}="([+-]?[0-9.]+)"`));
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function readDjiString(raw: string, name: string): string {
+  return raw.match(new RegExp(`drone-dji:${name}="([^"]*)"`))?.[1] ?? "";
+}
+
+function destination(lat: number, lon: number, bearing: number, meters: number): [number, number] {
+  const radius = 6378137;
+  const angular = meters / radius;
+  const theta = (bearing * Math.PI) / 180;
+  const phi1 = (lat * Math.PI) / 180;
+  const lambda1 = (lon * Math.PI) / 180;
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(angular) + Math.cos(phi1) * Math.sin(angular) * Math.cos(theta));
+  const lambda2 = lambda1 + Math.atan2(Math.sin(theta) * Math.sin(angular) * Math.cos(phi1), Math.cos(angular) - Math.sin(phi1) * Math.sin(phi2));
+  return [(phi2 * 180) / Math.PI, (lambda2 * 180) / Math.PI];
+}
+
+function formatNumber(value: number | null, digits = 2) {
+  return value == null ? "—" : value.toFixed(digits);
+}
+
+export default function DroneFitApp() {
+  const mapElement = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
+  const mapLeaflet = useRef<any>(null);
+  const markerLayer = useRef<any>(null);
+  const drawingLayer = useRef<any>(null);
+
+  const [projectName, setProjectName] = useState("Tuiterd Holten");
+  const [site, setSite] = useState<SitePosition>(INITIAL_SITE);
+  const [siteConfirmed, setSiteConfirmed] = useState(false);
+  const [drawingName, setDrawingName] = useState("");
+  const [drawingImage, setDrawingImage] = useState("");
+  const [drawingAspect, setDrawingAspect] = useState(1.414);
+  const [drawingWidth, setDrawingWidth] = useState(180);
+  const [drawingRotation, setDrawingRotation] = useState(0);
+  const [drawingOpacity, setDrawingOpacity] = useState(0.58);
+  const [drone, setDrone] = useState<DroneData | null>(null);
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("Klik op de projectlocatie in de kaart.");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function createMap() {
+      if (!mapElement.current || mapInstance.current) return;
+      const L = await import("leaflet");
+      if (cancelled || !mapElement.current) return;
+      mapLeaflet.current = L;
+      const map = L.map(mapElement.current, { zoomControl: false }).setView([INITIAL_SITE.lat, INITIAL_SITE.lon], 17);
+      mapInstance.current = map;
+      L.control.zoom({ position: "bottomright" }).addTo(map);
+      const luchtfoto = L.tileLayer.wms("https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0", {
+        layers: "Actueel_orthoHR", format: "image/jpeg", maxZoom: 22, attribution: "PDOK Luchtfoto",
+      }).addTo(map);
+      const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 20, attribution: "© OpenStreetMap" });
+      const kadaster = L.tileLayer.wms("https://service.pdok.nl/kadaster/kadastralekaart/wms/v5_0", {
+        layers: "Kadastralekaart", format: "image/png", transparent: true, maxZoom: 22, attribution: "PDOK Kadaster",
+      }).addTo(map);
+      L.control.layers({ Luchtfoto: luchtfoto, Kaart: osm }, { Kadaster: kadaster }, { position: "topright" }).addTo(map);
+      markerLayer.current = L.layerGroup().addTo(map);
+      map.on("click", (event: any) => {
+        setSite({ lat: event.latlng.lat, lon: event.latlng.lng });
+        setSiteConfirmed(true);
+        setNotice("Projectlocatie vastgelegd. Upload nu de situatietekening.");
+      });
+      setTimeout(() => map.invalidateSize(), 50);
+    }
+    createMap();
+    return () => { cancelled = true; mapInstance.current?.remove(); mapInstance.current = null; };
+  }, []);
+
+  useEffect(() => {
+    const L = mapLeaflet.current;
+    const layer = markerLayer.current;
+    if (!L || !layer) return;
+    layer.clearLayers();
+    L.circleMarker([site.lat, site.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#ff5d2e", fillOpacity: 1 })
+      .bindTooltip("Projectanker", { permanent: true, direction: "top", offset: [0, -10] }).addTo(layer);
+    if (drone?.latitude != null && drone.longitude != null) {
+      const position: [number, number] = [drone.latitude, drone.longitude];
+      const yaw = drone.gimbalYaw ?? drone.flightYaw ?? 0;
+      const tip = destination(position[0], position[1], yaw, 115);
+      const left = destination(position[0], position[1], yaw - 28, 92);
+      const right = destination(position[0], position[1], yaw + 28, 92);
+      L.polygon([position, left, tip, right], { color: "#0f6f67", weight: 2, fillColor: "#3bd0c3", fillOpacity: 0.2 }).addTo(layer);
+      const droneIcon = L.divIcon({ className: "drone-pin", html: "<span>✦</span>", iconSize: [30, 30], iconAnchor: [15, 15] });
+      const droneMarker = L.marker(position, { icon: droneIcon, draggable: true })
+        .bindTooltip("Drone · versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
+      droneMarker.on("dragend", (event: any) => {
+        const point = event.target.getLatLng();
+        setDrone((current) => current ? { ...current, latitude: point.lat, longitude: point.lng } : current);
+        setNotice("Dronepositie handmatig gecorrigeerd.");
+      });
+    }
+  }, [site, drone]);
+
+  useEffect(() => {
+    const L = mapLeaflet.current;
+    const map = mapInstance.current;
+    if (!L || !map) return;
+    if (drawingLayer.current) { map.removeLayer(drawingLayer.current); drawingLayer.current = null; }
+    if (!drawingImage) return;
+    const heightMeters = drawingWidth / drawingAspect;
+    const diagonal = Math.hypot(drawingWidth, heightMeters) / 2;
+    const southWest = destination(site.lat, site.lon, 225, diagonal);
+    const northEast = destination(site.lat, site.lon, 45, diagonal);
+    const overlay = L.imageOverlay(drawingImage, [southWest, northEast], { opacity: drawingOpacity, interactive: false, className: "drawing-overlay" }).addTo(map);
+    overlay.on("load", () => { const element = overlay.getElement(); if (element) element.style.rotate = `${drawingRotation}deg`; });
+    drawingLayer.current = overlay;
+    return () => { if (drawingLayer.current === overlay) { map.removeLayer(overlay); drawingLayer.current = null; } };
+  }, [drawingImage, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, site]);
+
+  async function handleDrawing(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy("Situatietekening verwerken…");
+    try {
+      const pdfjs = await import("pdfjs-dist");
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 1.7 });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      if (!context) throw new Error("Canvas kon niet worden aangemaakt");
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
+      setDrawingName(file.name); setDrawingAspect(viewport.width / viewport.height); setDrawingImage(canvas.toDataURL("image/png"));
+      setNotice("Situatietekening geladen. Stel schaal, rotatie en dekking af op de luchtfoto.");
+    } catch (error) {
+      setNotice(`PDF kon niet worden geladen: ${error instanceof Error ? error.message : "onbekende fout"}`);
+    } finally { setBusy(""); }
+  }
+
+  async function handleDronePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy("DJI-metadata uitlezen…");
+    try {
+      const buffer = await file.arrayBuffer();
+      const tags: any = await exifr.parse(buffer, { gps: true, tiff: true, exif: true, xmp: true, translateValues: true });
+      const raw = new TextDecoder("latin1").decode(buffer);
+      const bitmap = await createImageBitmap(file);
+      const next: DroneData = {
+        fileName: file.name, previewUrl: URL.createObjectURL(file),
+        latitude: readDjiAttribute(raw, "GpsLatitude") ?? tags?.latitude ?? null,
+        longitude: readDjiAttribute(raw, "GpsLongitude") ?? tags?.longitude ?? null,
+        relativeAltitude: readDjiAttribute(raw, "RelativeAltitude"),
+        absoluteAltitude: readDjiAttribute(raw, "AbsoluteAltitude") ?? tags?.GPSAltitude ?? null,
+        gimbalYaw: readDjiAttribute(raw, "GimbalYawDegree"), gimbalPitch: readDjiAttribute(raw, "GimbalPitchDegree"),
+        gimbalRoll: readDjiAttribute(raw, "GimbalRollDegree"), flightYaw: readDjiAttribute(raw, "FlightYawDegree"),
+        focalLength: Number(tags?.FocalLength) || null,
+        focalLength35mm: Number(tags?.FocalLengthIn35mmFormat ?? tags?.FocalLengthIn35mmFilm) || null,
+        width: Number(tags?.ExifImageWidth) || bitmap.width, height: Number(tags?.ExifImageHeight) || bitmap.height,
+        cameraMake: tags?.Make ?? "DJI", cameraModel: tags?.Model ?? readDjiString(raw, "ProductName"),
+        capturedAt: tags?.DateTimeOriginal instanceof Date ? tags.DateTimeOriginal.toISOString() : String(tags?.DateTimeOriginal ?? ""),
+      };
+      bitmap.close();
+      setDrone((current) => { if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl); return next; });
+      if (next.latitude != null && next.longitude != null) mapInstance.current?.setView([next.latitude, next.longitude], Math.max(mapInstance.current.getZoom(), 17));
+      setNotice("Dronecamera gevonden. Controleer de positie en kijkrichting op de kaart.");
+    } catch (error) {
+      setNotice(`Foto kon niet worden gelezen: ${error instanceof Error ? error.message : "onbekende fout"}`);
+    } finally { setBusy(""); }
+  }
+
+  function exportProject() {
+    const sensorWidth = drone?.focalLength && drone.focalLength35mm ? (drone.focalLength * 36) / drone.focalLength35mm : 13;
+    const payload = {
+      schema: "nl.dronefit.project", version: 1,
+      project: { name: projectName, createdAt: new Date().toISOString() },
+      crs: { horizontal: "EPSG:28992", vertical: "NAP", compound: "EPSG:7415" },
+      site: { latitude: site.lat, longitude: site.lon, confirmed: siteConfirmed },
+      drawing: drawingName ? { fileName: drawingName, widthMeters: drawingWidth, rotationDegreesClockwise: drawingRotation, opacity: drawingOpacity } : null,
+      photo: drone ? {
+        fileName: drone.fileName, width: drone.width, height: drone.height,
+        latitude: drone.latitude, longitude: drone.longitude,
+        relativeAltitude: drone.relativeAltitude, absoluteAltitude: drone.absoluteAltitude,
+        gimbalYaw: drone.gimbalYaw, gimbalPitch: drone.gimbalPitch, gimbalRoll: drone.gimbalRoll,
+        flightYaw: drone.flightYaw, focalLengthMm: drone.focalLength, focalLength35mm: drone.focalLength35mm,
+        estimatedSensorWidthMm: sensorWidth, cameraMake: drone.cameraMake, cameraModel: drone.cameraModel, capturedAt: drone.capturedAt,
+      } : null,
+      buildings: [], controlPoints: [],
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project"}.dronefit.json`;
+    link.click(); URL.revokeObjectURL(link.href);
+    setNotice("DroneFit-project geëxporteerd. Dit bestand kan direct in Blender worden geïmporteerd.");
+  }
+
+  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName), Boolean(drone), false], [siteConfirmed, drawingName, drone]);
+  const activeStep = completedSteps.filter(Boolean).length;
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand"><span className="brand-mark">D</span><span>DroneFit</span><small>vastgoed camera matching</small></div>
+        <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
+        <div className="top-actions"><span className="crs-chip">RD + NAP · EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
+      </header>
+      <section className="workspace">
+        <aside className="sidebar">
+          <div className="progress-line">
+            {["Locatie", "Situatie", "Dronefoto", "Camera-match"].map((label, index) => (
+              <div className={`progress-step ${completedSteps[index] ? "done" : index === activeStep ? "active" : ""}`} key={label}>
+                <span>{completedSteps[index] ? "✓" : index + 1}</span><b>{label}</b>
+              </div>
+            ))}
+          </div>
+          <div className="status-message"><i />{busy || notice}</div>
+          <section className="tool-card">
+            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div></div>
+            <div className="coordinate-grid">
+              <label>Breedtegraad<input type="number" step="0.000001" value={site.lat} onChange={(e) => setSite({ ...site, lat: Number(e.target.value) })} /></label>
+              <label>Lengtegraad<input type="number" step="0.000001" value={site.lon} onChange={(e) => setSite({ ...site, lon: Number(e.target.value) })} /></label>
+            </div>
+            <button className="secondary-button" onClick={() => { setSiteConfirmed(true); mapInstance.current?.setView([site.lat, site.lon], 18); }}>Bevestig locatie</button>
+          </section>
+          <section className="tool-card">
+            <div className="card-heading"><span>02</span><div><h2>Situatietekening</h2><p>Upload de PDF en lijn hem uit op de kaart.</p></div></div>
+            <label className={`dropzone ${drawingName ? "loaded" : ""}`}><input type="file" accept="application/pdf" onChange={handleDrawing} /><strong>{drawingName || "Kies situatie-PDF"}</strong><small>{drawingName ? "PDF zichtbaar als kaartoverlay" : "Eerste pagina wordt gebruikt"}</small></label>
+            {drawingName && <div className="slider-stack">
+              <label><span>Breedte <b>{drawingWidth} m</b></span><input type="range" min="40" max="400" value={drawingWidth} onChange={(e) => setDrawingWidth(Number(e.target.value))} /></label>
+              <label><span>Rotatie <b>{drawingRotation}°</b></span><input type="range" min="-180" max="180" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
+              <label><span>Dekking <b>{Math.round(drawingOpacity * 100)}%</b></span><input type="range" min="0.1" max="0.9" step="0.05" value={drawingOpacity} onChange={(e) => setDrawingOpacity(Number(e.target.value))} /></label>
+            </div>}
+          </section>
+          <section className="tool-card">
+            <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div></div>
+            <label className={`dropzone photo-dropzone ${drone ? "loaded" : ""}`} style={drone ? { backgroundImage: `linear-gradient(90deg, rgba(7,22,25,.88), rgba(7,22,25,.4)), url(${drone.previewUrl})` } : undefined}>
+              <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
+            </label>
+            {drone && <>
+              <div className="metadata-grid">
+                <div><span>GPS</span><b>{formatNumber(drone.latitude, 6)}, {formatNumber(drone.longitude, 6)}</b></div>
+                <div><span>Hoogte</span><b>{formatNumber(drone.relativeAltitude)} m</b></div>
+                <div><span>Gimbal</span><b>{formatNumber(drone.gimbalYaw)}° / {formatNumber(drone.gimbalPitch)}°</b></div>
+                <div><span>Lens</span><b>{formatNumber(drone.focalLength)} mm</b></div>
+              </div>
+              <div className="slider-stack camera-controls">
+                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => setDrone({ ...drone, gimbalYaw: Number(e.target.value) })} /></label>
+                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => setDrone({ ...drone, gimbalPitch: Number(e.target.value) })} /></label>
+                <label><span>Vlieghoogte <b>{formatNumber(drone.relativeAltitude)} m</b></span><input type="range" min="1" max="200" step="0.1" value={drone.relativeAltitude ?? 30} onChange={(e) => setDrone({ ...drone, relativeAltitude: Number(e.target.value) })} /></label>
+              </div>
+            </>}
+          </section>
+        </aside>
+        <section className="map-panel">
+          <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
+          <div className="map-title"><span>Kaart &amp; situatielaag</span><small>Klik om het projectanker te verplaatsen</small></div>
+          <div className="legend"><span><i className="site-dot" />Project</span><span><i className="drone-dot" />Drone</span><span><i className="drawing-swatch" />Situatie-PDF</span></div>
+          <div className="map-readout"><span>WGS84</span><b>{site.lat.toFixed(7)}</b><b>{site.lon.toFixed(7)}</b></div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
