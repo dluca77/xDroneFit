@@ -25,9 +25,11 @@ export default function ProjectPortal(){
      <div className="demo-photo"/>
      <div className="demo-atmosphere"/><div className="demo-scan"/>
      <div className="demo-address"><i>⌖</i><span><small>LOCATIE GEVONDEN</small>Tuitert, Holten</span><b>RD</b></div>
+     <div className="demo-plan-import"><i>PDF</i><span><small>SITUATIEKAART INLADEN</small>situatie_Tuitert.pdf</span><b><em/></b></div>
      <div className="demo-site"><i/><i/><i/><i/><span>SITUATIE.PDF</span></div>
      <div className="demo-camera"><BrandMark small/><span><small>DJI FC9313</small>9 mm · 72.4 m NAP</span><b>GPS</b></div>
      <div className="demo-frustum"/><div className="demo-target"><i/><b/></div>
+     <div className="demo-context-wire"><div className="ctx ctx-a"/><div className="ctx ctx-b"/><div className="ctx ctx-c"/><div className="ctx ctx-d"/><div className="ctx ctx-e"/><div className="ctx ctx-f"/><div className="ctx ctx-g"/><span>REFERENTIEGEOMETRIE · 3D BAG / AHN</span><i/></div>
      <div className="demo-massing">
       <div className="mass mass-a"><i/><b/><span/></div><div className="mass mass-b"><i/><b/><span/></div><div className="mass mass-c"><i/><b/><span/></div><div className="mass mass-d"><i/><b/><span/></div>
      </div>
@@ -35,10 +37,10 @@ export default function ProjectPortal(){
      <div className="demo-match"><span><i>✓</i><small>CAMERA MATCH</small><strong>Renderklaar</strong></span><b>99.4<small>%</small></b></div>
      <div className="demo-coordinates">X 228.491,62&nbsp;&nbsp; Y 479.302,18&nbsp;&nbsp; Z +12,40</div>
     </div>
-    <div className="demo-timeline" id="werkwijze"><div className="demo-progress"/><span><i>01</i>Locatie</span><span><i>02</i>Situatie</span><span><i>03</i>DJI camera</span><span><i>04</i>3D model</span><span><i>05</i>Render</span></div>
+    <div className="demo-timeline" id="werkwijze"><div className="demo-progress"/><span><i>01</i>Locatie</span><span><i>02</i>Situatie PDF</span><span><i>03</i>Omgevingsscan</span><span><i>04</i>Camera solve</span><span><i>05</i>Woningen</span><span><i>06</i>Render</span></div>
    </div>
   </section>
-  <section className="xdf-flow"><span>01 <b>Zoek de locatie</b></span><span>02 <b>Lijn de situatie uit</b></span><span>03 <b>Upload de DJI-foto</b></span><span>04 <b>Plaats woningen</b></span><span>05 <b>Render in Blender</b></span></section>
+  <section className="xdf-flow"><span>01 <b>Zoek de locatie</b></span><span>02 <b>Laad de situatiekaart</b></span><span>03 <b>Scan referentiegebouwen</b></span><span>04 <b>Los de DJI-camera op</b></span><span>05 <b>Plaats de woningen</b></span><span>06 <b>Render in Blender</b></span></section>
   <section className="xdf-projects" id="projecten">
    <div className="xdf-section-head"><div><span>PROJECTOMGEVING</span><h2>Klaar om in te passen?</h2></div><p>Maak een nieuw SX-project of open een bestaand project. Alle camera-, kaart- en woningdata wordt automatisch opgeslagen.</p></div>
    <div className="project-grid xdf-project-grid">
