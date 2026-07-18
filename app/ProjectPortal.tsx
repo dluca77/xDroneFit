@@ -19,16 +19,23 @@ export default function ProjectPortal(){
   </header>
   <section className="xdf-hero" id="top">
    <div className="xdf-copy"><span className="xdf-kicker"><i/>Camera matching voor vastgoed</span><h1>Van dronefoto naar <em>overtuigende render.</em></h1><p>Positioneer nieuwbouw exact in de echte omgeving. xDroneFit koppelt locatie, situatietekening en DJI-camera aan jouw Blender-model.</p><div className="xdf-actions"><a className="xdf-button" href="#projecten">Start een project <span>+</span></a><a className="xdf-textlink" href="#werkwijze">Bekijk hoe het werkt <span>↘</span></a></div><div className="xdf-proof"><strong>RD + NAP</strong><span>Exacte positie</span><strong>DJI EXIF</strong><span>Camera automatisch</span><strong>BLENDER</strong><span>Renderklaar export</span></div></div>
-   <div className="xdf-demo" aria-label="Animatie van de xDroneFit werkwijze">
-    <div className="demo-head"><span>LIVE WORKFLOW</span><b>SX26259 / HOLTEN</b><i/></div>
+   <div className="xdf-demo" aria-label="Animatie van kaart naar ingepaste vastgoedrender">
+    <div className="demo-head"><div className="demo-window-dots"><i/><i/><i/></div><span>xDRONEFIT / LIVE MATCH</span><b>SX26259 · HOLTEN</b><em><i/>LIVE</em></div>
     <div className="demo-canvas">
-     <div className="demo-grid"/><div className="demo-road road-a"/><div className="demo-road road-b"/>
-     <div className="demo-map-pin"><span/></div><div className="demo-boundary"><i/><i/><i/><i/></div>
-     <div className="demo-drone"><BrandMark small/><span>DJI FC9313</span></div><div className="demo-frustum"/>
-     <div className="demo-house house-a"><i/><b/></div><div className="demo-house house-b"><i/><b/></div><div className="demo-house house-c"><i/><b/></div><div className="demo-house house-d"><i/><b/></div>
-     <div className="demo-render-wash"/><div className="demo-status"><i/><span>Camera match gereed</span><b>99.4%</b></div>
+     <div className="demo-photo"/>
+     <div className="demo-atmosphere"/><div className="demo-scan"/>
+     <div className="demo-address"><i>⌖</i><span><small>LOCATIE GEVONDEN</small>Tuitert, Holten</span><b>RD</b></div>
+     <div className="demo-site"><i/><i/><i/><i/><span>SITUATIE.PDF</span></div>
+     <div className="demo-camera"><BrandMark small/><span><small>DJI FC9313</small>9 mm · 72.4 m NAP</span><b>GPS</b></div>
+     <div className="demo-frustum"/><div className="demo-target"><i/><b/></div>
+     <div className="demo-massing">
+      <div className="mass mass-a"><i/><b/><span/></div><div className="mass mass-b"><i/><b/><span/></div><div className="mass mass-c"><i/><b/><span/></div><div className="mass mass-d"><i/><b/><span/></div>
+     </div>
+     <div className="demo-render-reveal"/><div className="demo-reveal-line"><i/></div>
+     <div className="demo-match"><span><i>✓</i><small>CAMERA MATCH</small><strong>Renderklaar</strong></span><b>99.4<small>%</small></b></div>
+     <div className="demo-coordinates">X 228.491,62&nbsp;&nbsp; Y 479.302,18&nbsp;&nbsp; Z +12,40</div>
     </div>
-    <div className="demo-timeline" id="werkwijze"><span><i/>Kaart</span><span><i/>Situatie</span><span><i/>Drone</span><span><i/>Woningen</span><span><i/>Render</span></div>
+    <div className="demo-timeline" id="werkwijze"><div className="demo-progress"/><span><i>01</i>Locatie</span><span><i>02</i>Situatie</span><span><i>03</i>DJI camera</span><span><i>04</i>3D model</span><span><i>05</i>Render</span></div>
    </div>
   </section>
   <section className="xdf-flow"><span>01 <b>Zoek de locatie</b></span><span>02 <b>Lijn de situatie uit</b></span><span>03 <b>Upload de DJI-foto</b></span><span>04 <b>Plaats woningen</b></span><span>05 <b>Render in Blender</b></span></section>
