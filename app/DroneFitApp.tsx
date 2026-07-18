@@ -5,6 +5,7 @@ import * as exifr from "exifr";
 import "leaflet/dist/leaflet.css";
 
 type SitePosition = { lat: number; lon: number };
+type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
 type DroneData = {
   fileName: string; previewUrl: string;
   latitude: number | null; longitude: number | null;
@@ -61,7 +62,54 @@ export default function DroneFitApp() {
   const [drawingOpacity, setDrawingOpacity] = useState(0.58);
   const [drone, setDrone] = useState<DroneData | null>(null);
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("Klik op de projectlocatie in de kaart.");
+  const [notice, setNotice] = useState("Zoek een adres of klik op de projectlocatie in de kaart.");
+  const [addressQuery, setAddressQuery] = useState("");
+  const [addressResults, setAddressResults] = useState<AddressResult[]>([]);
+  const [addressBusy, setAddressBusy] = useState(false);
+  const [activeAddress, setActiveAddress] = useState(-1);
+
+  useEffect(() => {
+    const query = addressQuery.trim();
+    if (query.length < 2) {
+      setAddressResults([]);
+      setActiveAddress(-1);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setAddressBusy(true);
+      try {
+        const url = new URL("https://api.pdok.nl/kadaster/location-api/v1/search");
+        url.searchParams.set("q", query);
+        url.searchParams.set("adres[version]", "1");
+        url.searchParams.set("limit", "8");
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) throw new Error(`PDOK gaf status ${response.status}`);
+        const data = await response.json();
+        const results: AddressResult[] = (data.features ?? []).flatMap((feature: any) => {
+          const coordinates = feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null;
+          if (!coordinates || coordinates.length < 2) return [];
+          return [{
+            id: String(feature.id ?? `${coordinates[0]}-${coordinates[1]}`),
+            label: String(feature.properties?.display_name ?? feature.properties?.naam ?? "Onbekende locatie"),
+            lon: Number(coordinates[0]),
+            lat: Number(coordinates[1]),
+            kind: String(feature.properties?.type ?? "adres"),
+          }];
+        });
+        setAddressResults(results);
+        setActiveAddress(results.length ? 0 : -1);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setAddressResults([]);
+          setNotice(`Adres zoeken lukt nu niet: ${error instanceof Error ? error.message : "onbekende fout"}`);
+        }
+      } finally {
+        if (!controller.signal.aborted) setAddressBusy(false);
+      }
+    }, 280);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [addressQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +181,33 @@ export default function DroneFitApp() {
     drawingLayer.current = overlay;
     return () => { if (drawingLayer.current === overlay) { map.removeLayer(overlay); drawingLayer.current = null; } };
   }, [drawingImage, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, site]);
+
+  function selectAddress(result: AddressResult) {
+    const position = { lat: result.lat, lon: result.lon };
+    setSite(position);
+    setSiteConfirmed(true);
+    setAddressQuery(result.label);
+    setAddressResults([]);
+    setActiveAddress(-1);
+    mapInstance.current?.setView([result.lat, result.lon], 19);
+    setNotice(`Projectlocatie ingesteld op ${result.label}.`);
+  }
+
+  function handleAddressKey(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveAddress((current) => Math.min(current + 1, addressResults.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveAddress((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter" && activeAddress >= 0 && addressResults[activeAddress]) {
+      event.preventDefault();
+      selectAddress(addressResults[activeAddress]);
+    } else if (event.key === "Escape") {
+      setAddressResults([]);
+      setActiveAddress(-1);
+    }
+  }
 
   async function handleDrawing(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -273,6 +348,35 @@ export default function DroneFitApp() {
         </aside>
         <section className="map-panel">
           <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
+          <div className="address-search">
+            <div className="address-input-wrap">
+              <span aria-hidden="true">⌕</span>
+              <input
+                type="search"
+                value={addressQuery}
+                onChange={(event) => setAddressQuery(event.target.value)}
+                onKeyDown={handleAddressKey}
+                placeholder="Zoek adres, postcode of plaats…"
+                aria-label="Zoek een Nederlands adres"
+                aria-autocomplete="list"
+                aria-expanded={addressResults.length > 0}
+              />
+              {addressBusy && <i aria-label="Adressen zoeken" />}
+            </div>
+            {addressResults.length > 0 && <div className="address-results" role="listbox">
+              {addressResults.map((result, index) => <button
+                type="button"
+                key={result.id}
+                className={index === activeAddress ? "active" : ""}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectAddress(result)}
+                role="option"
+                aria-selected={index === activeAddress}
+              >
+                <span>{result.label}</span><small>{result.kind}</small>
+              </button>)}
+            </div>}
+          </div>
           <div className="map-title"><span>Kaart &amp; situatielaag</span><small>Klik om het projectanker te verplaatsen</small></div>
           <div className="legend"><span><i className="site-dot" />Project</span><span><i className="drone-dot" />Drone</span><span><i className="drawing-swatch" />Situatie-PDF</span></div>
           <div className="map-readout"><span>WGS84</span><b>{site.lat.toFixed(7)}</b><b>{site.lon.toFixed(7)}</b></div>
@@ -281,4 +385,6 @@ export default function DroneFitApp() {
     </main>
   );
 }
+
+
 
