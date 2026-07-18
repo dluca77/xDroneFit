@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as exifr from "exifr";
@@ -6,6 +6,7 @@ import "leaflet/dist/leaflet.css";
 
 type SitePosition = { lat: number; lon: number };
 type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
+type BuildingBlock = { id: string; typeName: string; lat: number; lon: number; rotation: number; elevation: number };
 type DroneData = {
   fileName: string; previewUrl: string;
   latitude: number | null; longitude: number | null;
@@ -41,7 +42,7 @@ function destination(lat: number, lon: number, bearing: number, meters: number):
 }
 
 function formatNumber(value: number | null, digits = 2) {
-  return value == null ? "—" : value.toFixed(digits);
+  return value == null ? "â€”" : value.toFixed(digits);
 }
 
 export default function DroneFitApp() {
@@ -67,6 +68,14 @@ export default function DroneFitApp() {
   const [addressResults, setAddressResults] = useState<AddressResult[]>([]);
   const [addressBusy, setAddressBusy] = useState(false);
   const [activeAddress, setActiveAddress] = useState(-1);
+  const [buildings, setBuildings] = useState<BuildingBlock[]>([]);
+  const [buildingType, setBuildingType] = useState("Tweekapper 1");
+  const [placingBuilding, setPlacingBuilding] = useState(false);
+  const placingBuildingRef = useRef(false);
+  const buildingTypeRef = useRef("Tweekapper 1");
+
+  useEffect(() => { placingBuildingRef.current = placingBuilding; }, [placingBuilding]);
+  useEffect(() => { buildingTypeRef.current = buildingType; }, [buildingType]);
 
   useEffect(() => {
     const query = addressQuery.trim();
@@ -124,7 +133,7 @@ export default function DroneFitApp() {
       const luchtfoto = L.tileLayer.wms("https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0", {
         layers: "Actueel_orthoHR", format: "image/jpeg", maxZoom: 22, attribution: "PDOK Luchtfoto",
       }).addTo(map);
-      const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 20, attribution: "© OpenStreetMap" });
+      const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 20, attribution: "Â© OpenStreetMap" });
       const kadaster = L.tileLayer.wms("https://service.pdok.nl/kadaster/kadastralekaart/wms/v5_0", {
         layers: "Kadastralekaart", format: "image/png", transparent: true, maxZoom: 22, attribution: "PDOK Kadaster",
       }).addTo(map);
@@ -148,6 +157,15 @@ export default function DroneFitApp() {
     layer.clearLayers();
     L.circleMarker([site.lat, site.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#ff5d2e", fillOpacity: 1 })
       .bindTooltip("Projectanker", { permanent: true, direction: "top", offset: [0, -10] }).addTo(layer);
+    buildings.forEach((building, index) => {
+      const buildingIcon = L.divIcon({ className: "building-pin", html: `<span style="transform:rotate(${building.rotation}deg)">${index + 1}</span>`, iconSize: [36, 36], iconAnchor: [18, 18] });
+      const marker = L.marker([building.lat, building.lon], { icon: buildingIcon, draggable: true })
+        .bindTooltip(`${building.typeName} Â· ${building.rotation}Â°`, { direction: "top", offset: [0, -16] }).addTo(layer);
+      marker.on("dragend", (event: any) => {
+        const point = event.target.getLatLng();
+        setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, lat: point.lat, lon: point.lng } : item));
+      });
+    });
     if (drone?.latitude != null && drone.longitude != null) {
       const position: [number, number] = [drone.latitude, drone.longitude];
       const yaw = drone.gimbalYaw ?? drone.flightYaw ?? 0;
@@ -155,16 +173,16 @@ export default function DroneFitApp() {
       const left = destination(position[0], position[1], yaw - 28, 92);
       const right = destination(position[0], position[1], yaw + 28, 92);
       L.polygon([position, left, tip, right], { color: "#0f6f67", weight: 2, fillColor: "#3bd0c3", fillOpacity: 0.2 }).addTo(layer);
-      const droneIcon = L.divIcon({ className: "drone-pin", html: "<span>✦</span>", iconSize: [30, 30], iconAnchor: [15, 15] });
+      const droneIcon = L.divIcon({ className: "drone-pin", html: "<span>âœ¦</span>", iconSize: [30, 30], iconAnchor: [15, 15] });
       const droneMarker = L.marker(position, { icon: droneIcon, draggable: true })
-        .bindTooltip("Drone · versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
+        .bindTooltip("Drone Â· versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
       droneMarker.on("dragend", (event: any) => {
         const point = event.target.getLatLng();
         setDrone((current) => current ? { ...current, latitude: point.lat, longitude: point.lng } : current);
         setNotice("Dronepositie handmatig gecorrigeerd.");
       });
     }
-  }, [site, drone]);
+  }, [site, drone, buildings]);
 
   useEffect(() => {
     const L = mapLeaflet.current;
@@ -212,7 +230,7 @@ export default function DroneFitApp() {
   async function handleDrawing(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setBusy("Situatietekening verwerken…");
+    setBusy("Situatietekening verwerkenâ€¦");
     try {
       const pdfjs = await import("pdfjs-dist");
       pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
@@ -234,7 +252,7 @@ export default function DroneFitApp() {
   async function handleDronePhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setBusy("DJI-metadata uitlezen…");
+    setBusy("DJI-metadata uitlezenâ€¦");
     try {
       const buffer = await file.arrayBuffer();
       const tags: any = await exifr.parse(buffer, { gps: true, tiff: true, exif: true, xmp: true, translateValues: true });
@@ -279,17 +297,17 @@ export default function DroneFitApp() {
         flightYaw: drone.flightYaw, focalLengthMm: drone.focalLength, focalLength35mm: drone.focalLength35mm,
         estimatedSensorWidthMm: sensorWidth, cameraMake: drone.cameraMake, cameraModel: drone.cameraModel, capturedAt: drone.capturedAt,
       } : null,
-      buildings: [], controlPoints: [],
+      buildings: buildings.map((building) => ({ id: building.id, typeName: building.typeName, latitude: building.lat, longitude: building.lon, rotationDegreesClockwise: building.rotation, elevationMeters: building.elevation })), controlPoints: [],
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = `${projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project"}.dronefit.json`;
     link.click(); URL.revokeObjectURL(link.href);
-    setNotice("DroneFit-project geëxporteerd. Dit bestand kan direct in Blender worden geïmporteerd.");
+    setNotice("DroneFit-project geÃ«xporteerd. Dit bestand kan direct in Blender worden geÃ¯mporteerd.");
   }
 
-  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName), Boolean(drone), false], [siteConfirmed, drawingName, drone]);
+  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName), Boolean(drone), buildings.length > 0, false], [siteConfirmed, drawingName, drone, buildings]);
   const activeStep = completedSteps.filter(Boolean).length;
 
   return (
@@ -297,14 +315,14 @@ export default function DroneFitApp() {
       <header className="topbar">
         <div className="brand"><span className="brand-mark">D</span><span>DroneFit</span><small>vastgoed camera matching</small></div>
         <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-        <div className="top-actions"><span className="crs-chip">RD + NAP · EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
+        <div className="top-actions"><span className="crs-chip">RD + NAP Â· EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
       </header>
       <section className="workspace">
         <aside className="sidebar">
           <div className="progress-line">
-            {["Locatie", "Situatie", "Dronefoto", "Camera-match"].map((label, index) => (
+            {["Locatie", "Situatie", "Dronefoto", "Woningen", "Camera-match"].map((label, index) => (
               <div className={`progress-step ${completedSteps[index] ? "done" : index === activeStep ? "active" : ""}`} key={label}>
-                <span>{completedSteps[index] ? "✓" : index + 1}</span><b>{label}</b>
+                <span>{completedSteps[index] ? "âœ“" : index + 1}</span><b>{label}</b>
               </div>
             ))}
           </div>
@@ -322,41 +340,51 @@ export default function DroneFitApp() {
             <label className={`dropzone ${drawingName ? "loaded" : ""}`}><input type="file" accept="application/pdf" onChange={handleDrawing} /><strong>{drawingName || "Kies situatie-PDF"}</strong><small>{drawingName ? "PDF zichtbaar als kaartoverlay" : "Eerste pagina wordt gebruikt"}</small></label>
             {drawingName && <div className="slider-stack">
               <label><span>Breedte <b>{drawingWidth} m</b></span><input type="range" min="40" max="400" value={drawingWidth} onChange={(e) => setDrawingWidth(Number(e.target.value))} /></label>
-              <label><span>Rotatie <b>{drawingRotation}°</b></span><input type="range" min="-180" max="180" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
+              <label><span>Rotatie <b>{drawingRotation}Â°</b></span><input type="range" min="-180" max="180" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
               <label><span>Dekking <b>{Math.round(drawingOpacity * 100)}%</b></span><input type="range" min="0.1" max="0.9" step="0.05" value={drawingOpacity} onChange={(e) => setDrawingOpacity(Number(e.target.value))} /></label>
             </div>}
           </section>
           <section className="tool-card">
             <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div></div>
             <label className={`dropzone photo-dropzone ${drone ? "loaded" : ""}`} style={drone ? { backgroundImage: `linear-gradient(90deg, rgba(7,22,25,.88), rgba(7,22,25,.4)), url(${drone.previewUrl})` } : undefined}>
-              <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
+              <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{drone ? `${drone.width} Ã— ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
             </label>
             {drone && <>
               <div className="metadata-grid">
                 <div><span>GPS</span><b>{formatNumber(drone.latitude, 6)}, {formatNumber(drone.longitude, 6)}</b></div>
                 <div><span>Hoogte</span><b>{formatNumber(drone.relativeAltitude)} m</b></div>
-                <div><span>Gimbal</span><b>{formatNumber(drone.gimbalYaw)}° / {formatNumber(drone.gimbalPitch)}°</b></div>
+                <div><span>Gimbal</span><b>{formatNumber(drone.gimbalYaw)}Â° / {formatNumber(drone.gimbalPitch)}Â°</b></div>
                 <div><span>Lens</span><b>{formatNumber(drone.focalLength)} mm</b></div>
               </div>
               <div className="slider-stack camera-controls">
-                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => setDrone({ ...drone, gimbalYaw: Number(e.target.value) })} /></label>
-                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => setDrone({ ...drone, gimbalPitch: Number(e.target.value) })} /></label>
+                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}Â°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => setDrone({ ...drone, gimbalYaw: Number(e.target.value) })} /></label>
+                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}Â°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => setDrone({ ...drone, gimbalPitch: Number(e.target.value) })} /></label>
                 <label><span>Vlieghoogte <b>{formatNumber(drone.relativeAltitude)} m</b></span><input type="range" min="1" max="200" step="0.1" value={drone.relativeAltitude ?? 30} onChange={(e) => setDrone({ ...drone, relativeAltitude: Number(e.target.value) })} /></label>
               </div>
             </>}
           </section>
-        </aside>
+          <section className="tool-card">
+            <div className="card-heading"><span>04</span><div><h2>Woningblokken</h2><p>Plaats de ankerpunten van de Blender-collecties.</p></div></div>
+            <label className="field-label">Collectienaam in Blender<input value={buildingType} onChange={(event) => setBuildingType(event.target.value)} list="building-types" /></label>
+            <datalist id="building-types"><option value="Tweekapper 1" /><option value="Tweekapper 2" /><option value="Tweekapper 3" /><option value="Tweekapper 4" /></datalist>
+            <button className={placingBuilding ? "primary-button" : "secondary-button"} onClick={() => { setPlacingBuilding((current) => !current); setNotice(placingBuilding ? "Plaatsen geannuleerd." : "Klik nu op het woninganker in de kaart."); }}>{placingBuilding ? "Klik nu in de kaart…" : "+ Plaats woningblok"}</button>
+            {buildings.length > 0 && <div className="building-list">{buildings.map((building, index) => <div className="building-row" key={building.id}>
+              <div><b>{index + 1}. {building.typeName}</b><button title="Verwijder woningblok" onClick={() => setBuildings((current) => current.filter((item) => item.id !== building.id))}>×</button></div>
+              <label><span>Rotatie <b>{building.rotation}°</b></span><input type="range" min="-180" max="180" value={building.rotation} onChange={(event) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, rotation: Number(event.target.value) } : item))} /></label>
+              <label><span>Peilhoogte</span><input type="number" step="0.1" value={building.elevation} onChange={(event) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, elevation: Number(event.target.value) } : item))} /></label>
+            </div>)}</div>}
+          </section>        </aside>
         <section className="map-panel">
           <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
           <div className="address-search">
             <div className="address-input-wrap">
-              <span aria-hidden="true">⌕</span>
+              <span aria-hidden="true">âŒ•</span>
               <input
                 type="search"
                 value={addressQuery}
                 onChange={(event) => setAddressQuery(event.target.value)}
                 onKeyDown={handleAddressKey}
-                placeholder="Zoek adres, postcode of plaats…"
+                placeholder="Zoek adres, postcode of plaatsâ€¦"
                 aria-label="Zoek een Nederlands adres"
                 aria-autocomplete="list"
                 aria-expanded={addressResults.length > 0}
@@ -377,8 +405,8 @@ export default function DroneFitApp() {
               </button>)}
             </div>}
           </div>
-          <div className="map-title"><span>Kaart &amp; situatielaag</span><small>Klik om het projectanker te verplaatsen</small></div>
-          <div className="legend"><span><i className="site-dot" />Project</span><span><i className="drone-dot" />Drone</span><span><i className="drawing-swatch" />Situatie-PDF</span></div>
+          <div className="map-title"><span>Kaart &amp; situatielaag</span><small>{placingBuilding ? "Klik om het woningblok te plaatsen" : "Klik om het projectanker te verplaatsen"}</small></div>
+          <div className="legend"><span><i className="site-dot" />Project</span><span><i className="drone-dot" />Drone</span><span><i className="building-dot" />Woning</span><span><i className="drawing-swatch" />Situatie-PDF</span></div>
           <div className="map-readout"><span>WGS84</span><b>{site.lat.toFixed(7)}</b><b>{site.lon.toFixed(7)}</b></div>
         </section>
       </section>
