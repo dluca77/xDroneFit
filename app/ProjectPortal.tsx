@@ -2,7 +2,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import DroneFitApp from "./DroneFitApp";
 export type ProjectRecord={id:string;code:string;name:string;stateJson:string;createdAt:string;updatedAt:string};
-function BrandMark({small=false}:{small?:boolean}){return <span className={small?"xf-mark xf-small":"xf-mark"} aria-hidden="true"><i/><i/><i/><i/></span>}
+function BrandMark({small=false}:{small?:boolean}){return <span className={small?"xf-mark xf-small":"xf-mark"} aria-hidden="true"><i/><i/><i/><i/><b>x</b></span>}
 export default function ProjectPortal(){
  const [projects,setProjects]=useState<ProjectRecord[]>([]),[current,setCurrent]=useState<ProjectRecord|null>(null),[loading,setLoading]=useState(true),[code,setCode]=useState("SX26259"),[name,setName]=useState("Tuiterd Holten"),[query,setQuery]=useState(""),[error,setError]=useState("");
  async function refresh(){setLoading(true);try{const r=await fetch("/api/projects");if(r.ok)setProjects(await r.json())}finally{setLoading(false)}}
@@ -13,13 +13,13 @@ export default function ProjectPortal(){
  if(current)return <DroneFitApp key={current.id} project={current} onBack={()=>{setCurrent(null);refresh()}}/>;
  return <main className="project-home xdf-home">
   <header className="xdf-nav">
-   <a className="xdf-logo" href="#top" aria-label="DroneFit home"><BrandMark/><span>Drone<b>Fit</b></span></a>
+   <a className="xdf-logo" href="#top" aria-label="xDroneFit home"><BrandMark/><span>xDrone<b>Fit</b></span></a>
    <nav aria-label="Hoofdnavigatie"><a href="#werkwijze">Werkwijze</a><a href="#projecten">Projecten</a></nav>
    <span className="xdf-private"><i/>Prive projectomgeving</span>
   </header>
   <section className="xdf-hero" id="top">
-   <div className="xdf-copy"><span className="xdf-kicker"><i/>Camera matching voor vastgoed</span><h1>Van dronefoto naar <em>overtuigende render.</em></h1><p>Positioneer nieuwbouw exact in de echte omgeving. DroneFit koppelt locatie, situatietekening en DJI-camera aan jouw Blender-model.</p><div className="xdf-actions"><a className="xdf-button" href="#projecten">Start een project <span>+</span></a><a className="xdf-textlink" href="#werkwijze">Bekijk hoe het werkt <span>↘</span></a></div><div className="xdf-proof"><strong>RD + NAP</strong><span>Exacte positie</span><strong>DJI EXIF</strong><span>Camera automatisch</span><strong>BLENDER</strong><span>Renderklaar export</span></div></div>
-   <div className="xdf-demo" aria-label="Animatie van de DroneFit werkwijze">
+   <div className="xdf-copy"><span className="xdf-kicker"><i/>Camera matching voor vastgoed</span><h1>Van dronefoto naar <em>overtuigende render.</em></h1><p>Positioneer nieuwbouw exact in de echte omgeving. xDroneFit koppelt locatie, situatietekening en DJI-camera aan jouw Blender-model.</p><div className="xdf-actions"><a className="xdf-button" href="#projecten">Start een project <span>+</span></a><a className="xdf-textlink" href="#werkwijze">Bekijk hoe het werkt <span>↘</span></a></div><div className="xdf-proof"><strong>RD + NAP</strong><span>Exacte positie</span><strong>DJI EXIF</strong><span>Camera automatisch</span><strong>BLENDER</strong><span>Renderklaar export</span></div></div>
+   <div className="xdf-demo" aria-label="Animatie van de xDroneFit werkwijze">
     <div className="demo-head"><span>LIVE WORKFLOW</span><b>SX26259 / HOLTEN</b><i/></div>
     <div className="demo-canvas">
      <div className="demo-grid"/><div className="demo-road road-a"/><div className="demo-road road-b"/>
@@ -39,6 +39,6 @@ export default function ProjectPortal(){
     <div className="existing-projects xdf-existing"><div className="projects-head"><div><span className="card-kicker">BESTAANDE PROJECTEN</span><h2>Ga verder waar je was</h2></div><label className="xdf-search"><span>⌕</span><input type="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Zoek SX of locatie..."/></label></div><div className="project-list">{loading?<div className="empty-projects"><i className="xdf-loader"/>Projecten laden...</div>:filtered.length===0?<div className="empty-projects"><b>Nog geen projecten</b><span>Maak hiernaast je eerste SX-project aan.</span></div>:filtered.map(p=>{let s:any={};try{s=JSON.parse(p.stateJson||"{}")}catch{}return <div className="project-item" key={p.id}><button className="project-open" onClick={()=>setCurrent(p)}><span className="project-code">{p.code}</span><span><b>{p.name}</b><small>{s.drone?"DJI-camera gekoppeld":"Locatie voorbereiden"} · {(s.buildings?.length??0)} woningblokken</small></span><time>{new Date(p.updatedAt).toLocaleDateString("nl-NL")}</time><i>↗</i></button><button className="delete-project" onClick={()=>remove(p)} aria-label="Verwijder project">×</button></div>})}</div></div>
    </div>
   </section>
-  <footer className="xdf-footer"><a className="xdf-logo" href="#top"><BrandMark small/><span>Drone<b>Fit</b></span></a><span>Vastgoed camera matching voor Blender</span><b>STUDIO-X · 2026</b></footer>
+  <footer className="xdf-footer"><a className="xdf-logo" href="#top"><BrandMark small/><span>xDrone<b>Fit</b></span></a><span>Vastgoed camera matching voor Blender</span><b>STUDIO-X · 2026</b></footer>
  </main>
 }

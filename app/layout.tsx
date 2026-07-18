@@ -1,4 +1,4 @@
-﻿import type { Metadata } from "next";
+import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
@@ -12,10 +12,10 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const image = `${protocol}://${host}/og.png`;
   return {
-    title: "DroneFit",
+    title: "xDroneFit",
     description: "Van kaart en DJI-foto naar een nauwkeurige Blender-camera.",
-    openGraph: { title: "DroneFit", description: "Van dronefoto naar Blender-camera", images: [{ url: image, width: 1680, height: 941 }] },
-    twitter: { card: "summary_large_image", title: "DroneFit", description: "Van dronefoto naar Blender-camera", images: [image] },
+    openGraph: { title: "xDroneFit", description: "Van dronefoto naar overtuigende Blender-render", images: [{ url: image, width: 1680, height: 941 }] },
+    twitter: { card: "summary_large_image", title: "xDroneFit", description: "Van dronefoto naar overtuigende Blender-render", images: [image] },
   };
 }
 

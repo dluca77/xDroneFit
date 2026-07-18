@@ -319,7 +319,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     link.href = URL.createObjectURL(blob);
     link.download = `${projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project"}.dronefit.json`;
     link.click(); URL.revokeObjectURL(link.href);
-    setNotice("DroneFit-project geÃ«xporteerd. Dit bestand kan direct in Blender worden geÃ¯mporteerd.");
+    setNotice("xDroneFit-project geÃ«xporteerd. Dit bestand kan direct in Blender worden geÃ¯mporteerd.");
   }
 
   const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName), Boolean(drone), buildings.length > 0, false], [siteConfirmed, drawingName, drone, buildings]);
@@ -328,7 +328,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><button className="back-projects" onClick={onBack}>Projecten</button><span className="xf-mark xf-small" aria-hidden="true"><i/><i/><i/><i/></span><span>Drone<b className="fit-word">Fit</b></span><small>{project.code}</small></div>
+        <div className="brand"><button className="back-projects" onClick={onBack}>Projecten</button><span className="xf-mark xf-small" aria-hidden="true"><i/><i/><i/><i/><b>x</b></span><span>xDrone<b className="fit-word">Fit</b></span><small>{project.code}</small></div>
         <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
         <div className="top-actions"><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD + NAP Â· EPSG:7415</span><button className="primary-button" onClick={exportProject} disabled={!drone || !drawingName}>Exporteer voor Blender</button></div>
       </header>
