@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as exifr from "exifr";
+import JSZip from "jszip";
 import "leaflet/dist/leaflet.css";
 import type { ProjectRecord } from "./ProjectPortal";
 import { solvePlanarCamera, solveExifCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
@@ -660,16 +661,19 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       cameraSolutionSource: cameraSolution ? "point-match" : "exif-metadata",
       quality: cameraSolution ? { rmsPixels: cameraSolution.rmsPixels, maxErrorPixels: cameraSolution.maxErrorPixels, pointCount: controlPoints.filter((point) => point.imageX != null).length, status: cameraSolution.rmsPixels <= 4 ? "excellent" : cameraSolution.rmsPixels <= 10 ? "usable" : "review" } : null,
     };
-    triggerDownload(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), `${baseName}.dronefit.json`);
+    const zip = new JSZip();
+    zip.file(`${baseName}.dronefit.json`, JSON.stringify(payload, null, 2));
     if (photoFileName) {
       const response = await fetch(`/api/projects/${project.id}/assets/photo`);
-      if (response.ok) triggerDownload(await response.blob(), photoFileName);
+      if (response.ok) zip.file(photoFileName, await response.blob());
     }
     if (drawingFileName) {
       const response = await fetch(`/api/projects/${project.id}/assets/drawing`);
-      if (response.ok) triggerDownload(await response.blob(), drawingFileName);
+      if (response.ok) zip.file(drawingFileName, await response.blob());
     }
-    setNotice("Project, dronefoto en situatietekening gedownload. Zet ze in dezelfde map en importeer het .json-bestand in Blender.");
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    triggerDownload(zipBlob, `${baseName}-xdronefit-export.zip`);
+    setNotice("Export gedownload als zip-bestand. Pak het volledig uit in één map en importeer het .json-bestand daarin in Blender.");
   }
 
   const drawingRegistered = drawingControlPoints.filter((point) => point.lat != null && point.lon != null).length >= 2;
