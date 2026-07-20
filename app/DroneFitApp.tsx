@@ -563,8 +563,18 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       bitmap.close();
       setPhotoLoadFailed(false);
       setDrone((current) => { if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl); return next; });
-      if (next.latitude != null && next.longitude != null) mapInstance.current?.setView([next.latitude, next.longitude], Math.max(mapInstance.current.getZoom(), 17));
-      setNotice("Dronecamera gevonden. Controleer de positie en kijkrichting op de kaart.");
+      if (next.latitude != null && next.longitude != null) {
+        mapInstance.current?.setView([next.latitude, next.longitude], Math.max(mapInstance.current.getZoom(), 17));
+        if (!siteConfirmed) {
+          setSite({ lat: next.latitude, lon: next.longitude });
+          setSiteConfirmed(true);
+          setNotice("Projectlocatie automatisch bepaald uit de dronefoto. Camera wordt berekend uit de EXIF-gegevens.");
+        } else {
+          setNotice("Dronecamera gevonden. Camera wordt berekend uit de EXIF-gegevens.");
+        }
+      } else {
+        setNotice("Dronecamera gevonden, maar geen GPS-positie in de foto. Stel de projectlocatie handmatig in.");
+      }
     } catch (error) {
       setNotice(`Foto kon niet worden gelezen: ${error instanceof Error ? error.message : "onbekende fout"}`);
     } finally { setBusy(""); }
@@ -686,7 +696,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           </div>
           <div className="status-message"><i />{busy || notice}</div>
           <section className={`tool-card ${collapsedSteps.location ? "collapsed" : ""}`}>
-            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div><LayerEye shown={layerVisibility.project} label="Projectanker" onToggle={() => setLayerVisibility((current) => ({ ...current, project: !current.project }))} /><CollapseButton collapsed={collapsedSteps.location} label="Projectlocatie" onToggle={() => toggleStep("location")} /></div>
+            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Optioneel: wordt automatisch gezet zodra je de dronefoto uploadt. Zoek een adres of klik op de kaart om zelf te kiezen.</p></div><LayerEye shown={layerVisibility.project} label="Projectanker" onToggle={() => setLayerVisibility((current) => ({ ...current, project: !current.project }))} /><CollapseButton collapsed={collapsedSteps.location} label="Projectlocatie" onToggle={() => toggleStep("location")} /></div>
             <div className="coordinate-grid">
               <label>Breedtegraad<input type="number" step="0.000001" value={site.lat} onChange={(e) => setSite({ ...site, lat: Number(e.target.value) })} /></label>
               <label>Lengtegraad<input type="number" step="0.000001" value={site.lon} onChange={(e) => setSite({ ...site, lon: Number(e.target.value) })} /></label>
