@@ -12,6 +12,8 @@ type BuildingBlock = { id: string; typeName: string; lat: number; lon: number; r
 type DrawingControlPoint = { id: string; imageX: number; imageY: number; lat: number | null; lon: number | null };
 type LayerVisibility = { project: boolean; drawing: boolean; drone: boolean; buildings: boolean; references: boolean };
 type LayerKey = keyof LayerVisibility;
+type StepKey = "location" | "drawing" | "drone" | "buildings" | "camera";
+type CollapsedSteps = Record<StepKey, boolean>;
 type DroneData = {
   fileName: string; previewUrl: string;
   assetRevision?: number;
@@ -73,6 +75,21 @@ function LayerEye({ shown, label, onToggle }: { shown: boolean; label: string; o
   return <button type="button" className={`layer-eye ${shown ? "shown" : "hidden"}`} aria-label={`${label} ${shown ? "verbergen" : "tonen"}`} aria-pressed={shown} onClick={onToggle}><i /></button>;
 }
 
+function NumericSlider({ label, value, min, max, step, unit, onChange }: { label: string; value: number; min: number; max: number; step: number; unit: string; onChange: (value: number) => void }) {
+  const update = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    onChange(Math.max(min, Math.min(max, next)));
+  };
+  return <label className="numeric-slider">
+    <span><span>{label}</span><span className="numeric-entry"><input type="number" aria-label={`${label} waarde`} min={min} max={max} step={step} value={value} onChange={(event) => update(event.currentTarget.valueAsNumber)} /><em>{unit}</em></span></span>
+    <input type="range" aria-label={`${label} schuifregelaar`} min={min} max={max} step={step} value={value} onChange={(event) => update(Number(event.currentTarget.value))} />
+  </label>;
+}
+
+function CollapseButton({ collapsed, label, onToggle }: { collapsed: boolean; label: string; onToggle: () => void }) {
+  return <button type="button" className={`collapse-step ${collapsed ? "collapsed" : ""}`} aria-label={`${label} ${collapsed ? "uitklappen" : "inklappen"}`} aria-expanded={!collapsed} onClick={onToggle}><i /></button>;
+}
+
 export default function DroneFitApp({ project, onBack }: { project: ProjectRecord; onBack: () => void }) {
   let saved: any = {};
   try { saved = JSON.parse(project.stateJson || "{}"); } catch { saved = {}; }
@@ -112,24 +129,75 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [pendingControlId, setPendingControlId] = useState<string | null>(null);
   const [cameraSolution, setCameraSolution] = useState<CameraSolution | null>(saved.cameraSolution || null);
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({ ...DEFAULT_LAYER_VISIBILITY, ...(saved.layerVisibility || {}) });
+  const [collapsedSteps, setCollapsedSteps] = useState<CollapsedSteps>({ location: false, drawing: false, drone: false, buildings: false, camera: false, ...(saved.collapsedSteps || {}) });
+  const [canUndo, setCanUndo] = useState(false);
   const placingBuildingRef = useRef(false);
   const buildingTypeRef = useRef("Tweekapper 1");
   const placingControlPointRef = useRef(false);
   const pendingDrawingMapIdRef = useRef<string | null>(null);
+  const undoHistoryRef = useRef<string[]>([]);
+  const lastUndoSnapshotRef = useRef("");
+  const restoringUndoRef = useRef(false);
 
   useEffect(() => { placingBuildingRef.current = placingBuilding; }, [placingBuilding]);
   useEffect(() => { buildingTypeRef.current = buildingType; }, [buildingType]);
   useEffect(() => { placingControlPointRef.current = placingControlPoint; }, [placingControlPoint]);
   useEffect(() => { pendingDrawingMapIdRef.current = pendingDrawingMapId; }, [pendingDrawingMapId]);
+  const undoSnapshot = useMemo(() => JSON.stringify({ projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, drone, buildings, controlPoints, cameraSolution, layerVisibility }), [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, drone, buildings, controlPoints, cameraSolution, layerVisibility]);
+
+  useEffect(() => {
+    if (!lastUndoSnapshotRef.current || restoringUndoRef.current) {
+      lastUndoSnapshotRef.current = undoSnapshot;
+      restoringUndoRef.current = false;
+      return;
+    }
+    const previous = lastUndoSnapshotRef.current;
+    if (previous === undoSnapshot) return;
+    setCanUndo(true);
+    const timer = window.setTimeout(() => {
+      undoHistoryRef.current.push(previous);
+      if (undoHistoryRef.current.length > 50) undoHistoryRef.current.shift();
+      lastUndoSnapshotRef.current = undoSnapshot;
+      setCanUndo(true);
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [undoSnapshot]);
+
+  function undoLastChange() {
+    const pendingPrevious = lastUndoSnapshotRef.current && lastUndoSnapshotRef.current !== undoSnapshot ? lastUndoSnapshotRef.current : "";
+    const previous = pendingPrevious || undoHistoryRef.current.pop();
+    if (!previous) return;
+    const state = JSON.parse(previous);
+    restoringUndoRef.current = true;
+    setProjectName(state.projectName); setSite(state.site); setSiteConfirmed(state.siteConfirmed);
+    setDrawingName(state.drawingName); setDrawingAspect(state.drawingAspect); setDrawingWidth(state.drawingWidth); setDrawingRotation(state.drawingRotation); setDrawingOpacity(state.drawingOpacity); setDrawingCenter(state.drawingCenter); setDrawingControlPoints(state.drawingControlPoints);
+    setDrone(state.drone); setBuildings(state.buildings); setControlPoints(state.controlPoints); setCameraSolution(state.cameraSolution); setLayerVisibility(state.layerVisibility);
+    lastUndoSnapshotRef.current = previous;
+    setCanUndo(undoHistoryRef.current.length > 0);
+    setNotice("Laatste wijziging teruggedraaid.");
+  }
+
+  useEffect(() => {
+    const handleUndo = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undoLastChange();
+      }
+    };
+    window.addEventListener("keydown", handleUndo);
+    return () => window.removeEventListener("keydown", handleUndo);
+  });
+
+  const toggleStep = (step: StepKey) => setCollapsedSteps((current) => ({ ...current, [step]: !current[step] }));
   const [saveState, setSaveState] = useState("Opgeslagen");
   async function saveProject() {
     setSaveState("Opslaan...");
     const safeDrone = drone ? { ...drone, previewUrl: "" } : null;
-    const state = { projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, hasDrawing: Boolean(drawingName), drone: safeDrone, buildings, controlPoints, cameraSolution, layerVisibility };
+    const state = { projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, hasDrawing: Boolean(drawingName), drone: safeDrone, buildings, controlPoints, cameraSolution, layerVisibility, collapsedSteps };
     const response = await fetch("/api/projects/" + project.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: project.code, name: projectName, state }) });
     setSaveState(response.ok ? "Opgeslagen" : "Opslaan mislukt");
   }
-  useEffect(() => { const timer = window.setTimeout(saveProject, 1200); return () => window.clearTimeout(timer); }, [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, drone, buildings, controlPoints, cameraSolution, layerVisibility]);
+  useEffect(() => { const timer = window.setTimeout(saveProject, 1200); return () => window.clearTimeout(timer); }, [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, drone, buildings, controlPoints, cameraSolution, layerVisibility, collapsedSteps]);
 
   useEffect(() => {
     const query = addressQuery.trim();
@@ -567,7 +635,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       <header className="topbar">
         <div className="brand"><button className="back-projects" onClick={onBack}>Projecten</button><span className="xf-mark xf-small" aria-hidden="true"><i/><i/><i/><i/><b>x</b></span><span>xDrone<b className="fit-word">Fit</b></span><small>{project.code}</small></div>
         <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-        <div className="top-actions"><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD New · EPSG:28992</span><button className="primary-button" onClick={exportProject} disabled={!cameraSolution}>Exporteer voor Blender</button></div>
+        <div className="top-actions"><button className="undo-button" onClick={undoLastChange} disabled={!canUndo} title="Laatste wijziging terugdraaien (Ctrl+Z)"><i />Ongedaan</button><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD New · EPSG:28992</span><button className="primary-button" onClick={exportProject} disabled={!cameraSolution}>Exporteer voor Blender</button></div>
       </header>
       <section className="workspace">
         <aside className="sidebar">
@@ -579,16 +647,16 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             ))}
           </div>
           <div className="status-message"><i />{busy || notice}</div>
-          <section className="tool-card">
-            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div><LayerEye shown={layerVisibility.project} label="Projectanker" onToggle={() => setLayerVisibility((current) => ({ ...current, project: !current.project }))} /></div>
+          <section className={`tool-card ${collapsedSteps.location ? "collapsed" : ""}`}>
+            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div><LayerEye shown={layerVisibility.project} label="Projectanker" onToggle={() => setLayerVisibility((current) => ({ ...current, project: !current.project }))} /><CollapseButton collapsed={collapsedSteps.location} label="Projectlocatie" onToggle={() => toggleStep("location")} /></div>
             <div className="coordinate-grid">
               <label>Breedtegraad<input type="number" step="0.000001" value={site.lat} onChange={(e) => setSite({ ...site, lat: Number(e.target.value) })} /></label>
               <label>Lengtegraad<input type="number" step="0.000001" value={site.lon} onChange={(e) => setSite({ ...site, lon: Number(e.target.value) })} /></label>
             </div>
             <button className="secondary-button" onClick={() => { setSiteConfirmed(true); mapInstance.current?.setView([site.lat, site.lon], 18); }}>Bevestig locatie</button>
           </section>
-          <section className="tool-card">
-            <div className="card-heading"><span>02</span><div><h2>Situatietekening</h2><p>Koppel twee punten; xDroneFit berekent de plaatsing.</p></div><LayerEye shown={layerVisibility.drawing} label="Situatiekaart" onToggle={() => setLayerVisibility((current) => ({ ...current, drawing: !current.drawing }))} /></div>
+          <section className={`tool-card ${collapsedSteps.drawing ? "collapsed" : ""}`}>
+            <div className="card-heading"><span>02</span><div><h2>Situatietekening</h2><p>Koppel twee punten; xDroneFit berekent de plaatsing.</p></div><LayerEye shown={layerVisibility.drawing} label="Situatiekaart" onToggle={() => setLayerVisibility((current) => ({ ...current, drawing: !current.drawing }))} /><CollapseButton collapsed={collapsedSteps.drawing} label="Situatietekening" onToggle={() => toggleStep("drawing")} /></div>
             <label className={`dropzone ${drawingName ? "loaded" : ""}`}><input type="file" accept="application/pdf" onChange={handleDrawing} /><strong>{drawingName || "Kies situatie-PDF"}</strong><small>{drawingName ? "PDF zichtbaar als kaartoverlay" : "Eerste pagina wordt gebruikt"}</small></label>
             {drawingName && <div className="drawing-registration">
               <div className={`drawing-point-picker ${pendingDrawingMapId ? "waiting-map" : ""}`} ref={drawingPreviewRef} onClick={handleDrawingPoint} role="button" tabIndex={0} aria-label="Referentiepunt op situatietekening kiezen">
@@ -602,13 +670,13 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
               {drawingControlPoints.length > 0 && <button className="text-button" onClick={() => { setDrawingControlPoints([]); setPendingDrawingMapId(null); pendingDrawingMapIdRef.current = null; setNotice("Registratie gewist. Klik opnieuw twee punten op de situatietekening."); }}>Registratie opnieuw</button>}
             </div>}
             {drawingName && <div className="slider-stack">
-              <label><span>Breedte <b>{drawingWidth} m</b></span><input type="range" min="10" max="1000" step="0.1" value={drawingWidth} onChange={(e) => setDrawingWidth(Number(e.target.value))} /></label>
-              <label><span>Rotatie <b>{drawingRotation}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
-              <label><span>Dekking <b>{Math.round(drawingOpacity * 100)}%</b></span><input type="range" min="0.1" max="0.9" step="0.05" value={drawingOpacity} onChange={(e) => setDrawingOpacity(Number(e.target.value))} /></label>
+              <NumericSlider label="Breedte" value={drawingWidth} min={10} max={1000} step={0.1} unit="m" onChange={setDrawingWidth} />
+              <NumericSlider label="Rotatie" value={drawingRotation} min={-180} max={180} step={0.1} unit="°" onChange={setDrawingRotation} />
+              <NumericSlider label="Dekking" value={Math.round(drawingOpacity * 100)} min={10} max={90} step={5} unit="%" onChange={(value) => setDrawingOpacity(value / 100)} />
             </div>}
           </section>
-          <section className="tool-card">
-            <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div><LayerEye shown={layerVisibility.drone} label="Drone en kijksector" onToggle={() => setLayerVisibility((current) => ({ ...current, drone: !current.drone }))} /></div>
+          <section className={`tool-card ${collapsedSteps.drone ? "collapsed" : ""}`}>
+            <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div><LayerEye shown={layerVisibility.drone} label="Drone en kijksector" onToggle={() => setLayerVisibility((current) => ({ ...current, drone: !current.drone }))} /><CollapseButton collapsed={collapsedSteps.drone} label="DJI-dronefoto" onToggle={() => toggleStep("drone")} /></div>
             <label className={`dropzone photo-dropzone ${drone ? "loaded" : ""}`} style={drone ? { backgroundImage: `linear-gradient(90deg, rgba(7,22,25,.88), rgba(7,22,25,.4)), url(${drone.previewUrl})` } : undefined}>
               <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{photoLoadFailed ? "Selecteer de originele DJI JPEG opnieuw" : drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{photoLoadFailed ? "De metadata staat er nog; alleen de fotovoorvertoning ontbreekt" : drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
             </label>
@@ -621,25 +689,25 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
               </div>
               <div className="camera-map-hint"><i /><span><b>Stel de drone op de kaart af</b>Versleep de drone voor de vliegpositie en het richtpunt voor de kijkrichting.</span></div>
               <div className="slider-stack camera-controls">
-                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => { setDrone({ ...drone, gimbalYaw: Number(e.target.value) }); setCameraSolution(null); }} /></label>
-                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => { setDrone({ ...drone, gimbalPitch: Number(e.target.value) }); setCameraSolution(null); }} /></label>
-                <label><span>Vlieghoogte <b>{formatNumber(drone.relativeAltitude)} m</b></span><input type="range" min="1" max="200" step="0.1" value={drone.relativeAltitude ?? 30} onChange={(e) => { setDrone({ ...drone, relativeAltitude: Number(e.target.value) }); setCameraSolution(null); }} /></label>
+                <NumericSlider label="Kijkrichting" value={drone.gimbalYaw ?? 0} min={-180} max={180} step={0.1} unit="°" onChange={(value) => { setDrone({ ...drone, gimbalYaw: value }); setCameraSolution(null); }} />
+                <NumericSlider label="Gimbal pitch" value={drone.gimbalPitch ?? 0} min={-90} max={10} step={0.1} unit="°" onChange={(value) => { setDrone({ ...drone, gimbalPitch: value }); setCameraSolution(null); }} />
+                <NumericSlider label="Vlieghoogte" value={drone.relativeAltitude ?? 30} min={1} max={200} step={0.1} unit="m" onChange={(value) => { setDrone({ ...drone, relativeAltitude: value }); setCameraSolution(null); }} />
               </div>
             </>}
           </section>
-          <section className="tool-card">
-            <div className="card-heading"><span>04</span><div><h2>Woningblokken</h2><p>Plaats de ankerpunten van de Blender-collecties.</p></div><LayerEye shown={layerVisibility.buildings} label="Woningblokken" onToggle={() => setLayerVisibility((current) => ({ ...current, buildings: !current.buildings }))} /></div>
+          <section className={`tool-card ${collapsedSteps.buildings ? "collapsed" : ""}`}>
+            <div className="card-heading"><span>04</span><div><h2>Woningblokken</h2><p>Plaats de ankerpunten van de Blender-collecties.</p></div><LayerEye shown={layerVisibility.buildings} label="Woningblokken" onToggle={() => setLayerVisibility((current) => ({ ...current, buildings: !current.buildings }))} /><CollapseButton collapsed={collapsedSteps.buildings} label="Woningblokken" onToggle={() => toggleStep("buildings")} /></div>
             <label className="field-label">Collectienaam in Blender<input value={buildingType} onChange={(event) => setBuildingType(event.target.value)} list="building-types" /></label>
             <datalist id="building-types"><option value="Tweekapper 1" /><option value="Tweekapper 2" /><option value="Tweekapper 3" /><option value="Tweekapper 4" /></datalist>
             <button className={placingBuilding ? "primary-button" : "secondary-button"} onClick={() => { const next = !placingBuilding; placingBuildingRef.current = next; placingControlPointRef.current = false; setPlacingBuilding(next); setPlacingControlPoint(false); setLayerVisibility((current) => ({ ...current, buildings: true })); setNotice(next ? "Klik nu op het woninganker in de kaart." : "Plaatsen geannuleerd."); }}>{placingBuilding ? "Klik nu in de kaart…" : "+ Plaats woningblok"}</button>
             {buildings.length > 0 && <div className="building-list">{buildings.map((building, index) => <div className="building-row" key={building.id}>
               <div><b>{index + 1}. {building.typeName}</b><button title="Verwijder woningblok" onClick={() => setBuildings((current) => current.filter((item) => item.id !== building.id))}>×</button></div>
-              <label><span>Rotatie <b>{building.rotation}°</b></span><input type="range" min="-180" max="180" value={building.rotation} onChange={(event) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, rotation: Number(event.target.value) } : item))} /></label>
+              <NumericSlider label="Rotatie" value={building.rotation} min={-180} max={180} step={1} unit="°" onChange={(value) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, rotation: value } : item))} />
               <label><span>Peilhoogte</span><input type="number" step="0.1" value={building.elevation} onChange={(event) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, elevation: Number(event.target.value) } : item))} /></label>
             </div>)}</div>}
           </section>
-          <section className="tool-card calibration-card">
-            <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /></div>
+          <section className={`tool-card calibration-card ${collapsedSteps.camera ? "collapsed" : ""}`}>
+            <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /><CollapseButton collapsed={collapsedSteps.camera} label="Camera-match" onToggle={() => toggleStep("camera")} /></div>
             {!drone && <p className="calibration-help">Upload eerst de originele DJI-foto.</p>}
             {drone && <>
               <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId && !photoLoadFailed ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
