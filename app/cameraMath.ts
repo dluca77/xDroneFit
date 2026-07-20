@@ -11,7 +11,7 @@ export type ControlPoint = {
 };
 
 export type CameraSolution = {
-  mode: "planar-homography";
+  mode: "planar-homography" | "exif-metadata";
   rmsPixels: number;
   maxErrorPixels: number;
   focalPixels: number;
@@ -165,5 +165,40 @@ export function solvePlanarCamera(points: ControlPoint[], siteLon: number, siteL
     focalPixels: fx, principalPoint: [cx, cy], sensorWidthMm: focalLengthMm * 36 / focalLength35mm, groundElevationNap: groundElevation, homography: H,
     rotationWorldToCamera: rotation, translationWorldToCamera: t, cameraLocalRd: center as [number, number, number],
     cameraRd: [siteRd[0] + center[0], siteRd[1] + center[1], groundElevation + center[2]], pointErrors: errors,
+  };
+}
+
+export type DroneExif = {
+  latitude: number; longitude: number;
+  relativeAltitude: number | null; absoluteAltitude: number | null;
+  gimbalYaw: number | null; gimbalPitch: number | null; gimbalRoll: number | null; flightYaw: number | null;
+  focalLength: number | null; focalLength35mm: number | null;
+  width: number; height: number;
+};
+
+export function solveExifCamera(drone: DroneExif, siteLon: number, siteLat: number): CameraSolution {
+  const yaw = ((drone.gimbalYaw ?? drone.flightYaw ?? 0) * Math.PI) / 180;
+  const pitch = ((drone.gimbalPitch ?? -45) * Math.PI) / 180;
+  const roll = ((drone.gimbalRoll ?? 0) * Math.PI) / 180;
+  const altitude = drone.relativeAltitude ?? 30;
+  const focal35 = drone.focalLength35mm ?? 24;
+  const right = [Math.cos(yaw), -Math.sin(yaw), 0];
+  const forward = [Math.sin(yaw) * Math.cos(pitch), Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch)];
+  const down = normalize(cross(forward, right));
+  const r1 = right.map((value, i) => value * Math.cos(roll) + down[i] * Math.sin(roll));
+  const r2 = down.map((value, i) => value * Math.cos(roll) - right[i] * Math.sin(roll));
+  const r3 = forward;
+  const rotation = [[r1[0], r2[0], r3[0]], [r1[1], r2[1], r3[1]], [r1[2], r2[2], r3[2]]];
+  const siteRd = wgs84ToRd(siteLon, siteLat);
+  const droneRd = wgs84ToRd(drone.longitude, drone.latitude);
+  const local: [number, number, number] = [droneRd[0] - siteRd[0], droneRd[1] - siteRd[1], altitude];
+  const fx = (focal35 / 36) * drone.width;
+  return {
+    mode: "exif-metadata", rmsPixels: 0, maxErrorPixels: 0,
+    focalPixels: fx, principalPoint: [drone.width / 2, drone.height / 2],
+    sensorWidthMm: drone.focalLength && focal35 ? (drone.focalLength * 36) / focal35 : 36,
+    groundElevationNap: 0, homography: [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    rotationWorldToCamera: rotation, translationWorldToCamera: [0, 0, 0], cameraLocalRd: local,
+    cameraRd: [siteRd[0] + local[0], siteRd[1] + local[1], local[2]], pointErrors: [],
   };
 }

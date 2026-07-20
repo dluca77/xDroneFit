@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rdToWgs84, solvePlanarCamera, solveTwoPointDrawingRegistration, wgs84ToRd } from "../app/cameraMath.ts";
+import { rdToWgs84, solveExifCamera, solvePlanarCamera, solveTwoPointDrawingRegistration, wgs84ToRd } from "../app/cameraMath.ts";
 
 test("recovers situation drawing position, scale and rotation from two points", () => {
   const centerWgs = { lon: 6.426162461, lat: 52.282539407 };
@@ -47,4 +47,40 @@ test("recovers a known camera pose from six planar control points", () => {
   const solution = solvePlanarCamera(points, site.lon, site.lat, 8192, 6144, 24, 9);
   assert.ok(solution.rmsPixels < 0.001);
   solution.cameraLocalRd.forEach((value, index) => assert.ok(Math.abs(value - expectedCenter[index]) < 0.002));
+});
+
+test("solves an EXIF-only camera pose straight from DJI metadata", () => {
+  const site = { lon: 6.426162461, lat: 52.282539407 };
+  const origin = wgs84ToRd(site.lon, site.lat);
+  const droneWgs = rdToWgs84(origin[0] + 40, origin[1] - 15);
+  const solution = solveExifCamera({
+    latitude: droneWgs[1], longitude: droneWgs[0],
+    relativeAltitude: 70, absoluteAltitude: null,
+    gimbalYaw: 0, gimbalPitch: -90, gimbalRoll: 0, flightYaw: null,
+    focalLength: 9, focalLength35mm: 24,
+    width: 8192, height: 6144,
+  }, site.lon, site.lat);
+  assert.equal(solution.mode, "exif-metadata");
+  assert.ok(Math.abs(solution.cameraLocalRd[0] - 40) < 0.01);
+  assert.ok(Math.abs(solution.cameraLocalRd[1] - (-15)) < 0.01);
+  assert.equal(solution.cameraLocalRd[2], 70);
+  const forward = solution.rotationWorldToCamera[2];
+  assert.ok(Math.abs(forward[0]) < 1e-9);
+  assert.ok(Math.abs(forward[1]) < 1e-9);
+  assert.ok(Math.abs(forward[2] - -1) < 1e-9);
+});
+
+test("EXIF camera yaw rotates the forward-facing horizontal view direction", () => {
+  const site = { lon: 6.426162461, lat: 52.282539407 };
+  const solution = solveExifCamera({
+    latitude: site.lat, longitude: site.lon,
+    relativeAltitude: 30, absoluteAltitude: null,
+    gimbalYaw: 90, gimbalPitch: -45, gimbalRoll: 0, flightYaw: null,
+    focalLength: 9, focalLength35mm: 24,
+    width: 8192, height: 6144,
+  }, site.lon, site.lat);
+  const rotation = solution.rotationWorldToCamera;
+  const forward = [rotation[0][2], rotation[1][2], rotation[2][2]];
+  assert.ok(forward[0] > 0.5, "facing east should have a strong positive east component");
+  assert.ok(Math.abs(forward[1]) < 0.1, "facing due east should have ~0 north component");
 });

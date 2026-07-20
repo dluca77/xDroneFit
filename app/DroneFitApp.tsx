@@ -4,7 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as exifr from "exifr";
 import "leaflet/dist/leaflet.css";
 import type { ProjectRecord } from "./ProjectPortal";
-import { solvePlanarCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
+import { solvePlanarCamera, solveExifCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
 
 type SitePosition = { lat: number; lon: number };
 type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
@@ -128,6 +128,20 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [placingControlPoint, setPlacingControlPoint] = useState(false);
   const [pendingControlId, setPendingControlId] = useState<string | null>(null);
   const [cameraSolution, setCameraSolution] = useState<CameraSolution | null>(saved.cameraSolution || null);
+  const exifCamera = useMemo(() => {
+    if (!drone || drone.latitude == null || drone.longitude == null || !drone.width || !drone.height) return null;
+    try {
+      return solveExifCamera({
+        latitude: drone.latitude, longitude: drone.longitude,
+        relativeAltitude: drone.relativeAltitude, absoluteAltitude: drone.absoluteAltitude,
+        gimbalYaw: drone.gimbalYaw, gimbalPitch: drone.gimbalPitch, gimbalRoll: drone.gimbalRoll, flightYaw: drone.flightYaw,
+        focalLength: drone.focalLength, focalLength35mm: drone.focalLength35mm,
+        width: drone.width, height: drone.height,
+      }, site.lon, site.lat);
+    }
+    catch { return null; }
+  }, [drone, site]);
+  const effectiveCameraSolution = cameraSolution ?? exifCamera;
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({ ...DEFAULT_LAYER_VISIBILITY, ...(saved.layerVisibility || {}) });
   const [collapsedSteps, setCollapsedSteps] = useState<CollapsedSteps>({ location: false, drawing: false, drone: false, buildings: false, camera: false, ...(saved.collapsedSteps || {}) });
   const [canUndo, setCanUndo] = useState(false);
@@ -359,14 +373,15 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         setCameraSolution(null);
       });
     });    if (layerVisibility.drone && drone?.latitude != null && drone.longitude != null) {
-      const solvedWgs = cameraSolution ? rdToWgs84(cameraSolution.cameraRd[0], cameraSolution.cameraRd[1]) : null;
+      const solvedWgs = effectiveCameraSolution ? rdToWgs84(effectiveCameraSolution.cameraRd[0], effectiveCameraSolution.cameraRd[1]) : null;
       const position: [number, number] = solvedWgs ? [solvedWgs[1], solvedWgs[0]] : [drone.latitude, drone.longitude];
-      const solvedForward = cameraSolution?.rotationWorldToCamera[2];
+      const solvedRotation = effectiveCameraSolution?.rotationWorldToCamera;
+      const solvedForward = solvedRotation ? [solvedRotation[0][2], solvedRotation[1][2], solvedRotation[2][2]] : null;
       const solvedYaw = solvedForward ? Math.atan2(solvedForward[0], solvedForward[1]) * 180 / Math.PI : null;
       const yaw = solvedYaw ?? drone.gimbalYaw ?? drone.flightYaw ?? 0;
       const focal35 = drone.focalLength35mm ?? 24;
       const horizontalFov = 2 * Math.atan(36 / (2 * focal35)) * 180 / Math.PI;
-      const altitude = Math.max(1, cameraSolution?.cameraLocalRd[2] ?? drone.relativeAltitude ?? 30);
+      const altitude = Math.max(1, effectiveCameraSolution?.cameraLocalRd[2] ?? drone.relativeAltitude ?? 30);
       const solvedDown = solvedForward ? Math.asin(Math.max(-1, Math.min(1, -solvedForward[2]))) * 180 / Math.PI : null;
       const downAngle = Math.max(8, Math.min(89, solvedDown ?? -(drone.gimbalPitch ?? -45)));
       const centerDistance = Math.min(500, altitude / Math.tan(downAngle * Math.PI / 180));
@@ -400,7 +415,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       });
       const droneIcon = L.divIcon({ className: "drone-pin", html: "<span>✦</span>", iconSize: [30, 30], iconAnchor: [15, 15] });
       const droneMarker = L.marker(position, { icon: droneIcon, draggable: true })
-        .bindTooltip(cameraSolution ? "Berekende camera · versleep voor handmatige correctie" : "Drone · versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
+        .bindTooltip(cameraSolution ? "Puntmatching-camera · versleep voor handmatige correctie" : "EXIF-camera · versleep voor handmatige correctie", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
       droneMarker.on("drag", (event: any) => {
         const point = event.target.getLatLng();
         const cameraPosition: [number, number] = [point.lat, point.lng];
@@ -416,7 +431,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         setNotice("Dronepositie handmatig gecorrigeerd.");
       });
     }
-  }, [site, drone, buildings, controlPoints, cameraSolution, drawingImage, drawingCenter, drawingControlPoints, layerVisibility]);
+  }, [site, drone, buildings, controlPoints, cameraSolution, effectiveCameraSolution, drawingImage, drawingCenter, drawingControlPoints, layerVisibility]);
 
   useEffect(() => {
     const L = mapLeaflet.current;
@@ -585,21 +600,39 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   }
 
   function downloadBlenderImporter() {
-    const script = `# xDroneFit Blender importer v2\nimport bpy, json, math\nfrom mathutils import Matrix, Vector\nfrom bpy_extras.io_utils import ImportHelper\n\nclass XDRONEFIT_OT_import(bpy.types.Operator, ImportHelper):\n    bl_idname = 'xdronefit.import_project'\n    bl_label = 'Import xDroneFit project'\n    filename_ext = '.json'\n    filter_glob: bpy.props.StringProperty(default='*.json;*.dronefit.json', options={'HIDDEN'})\n\n    def execute(self, context):\n        with open(self.filepath, 'r', encoding='utf-8') as handle:\n            data = json.load(handle)\n        solution = data.get('cameraSolution')\n        photo = data.get('photo')\n        if not solution or not photo:\n            self.report({'ERROR'}, 'Project bevat nog geen berekende camera')\n            return {'CANCELLED'}\n        scene = context.scene\n        scene.unit_settings.system = 'METRIC'\n        scene.unit_settings.scale_length = 1.0\n        camera_data = bpy.data.cameras.get('xDroneFit Camera') or bpy.data.cameras.new('xDroneFit Camera')\n        camera = bpy.data.objects.get('xDroneFit Camera') or bpy.data.objects.new('xDroneFit Camera', camera_data)\n        if camera.name not in scene.collection.objects:\n            scene.collection.objects.link(camera)\n        r = Matrix(solution['rotationWorldToCamera'])\n        cv_to_blender = Matrix(((1,0,0),(0,-1,0),(0,0,-1)))\n        rotation_world = r.transposed() @ cv_to_blender\n        location = Vector(solution['cameraLocalRd'])\n        camera.matrix_world = rotation_world.to_4x4()\n        camera.location = location\n        camera_data.lens = photo['focalLengthMm']\n        camera_data.sensor_width = photo['estimatedSensorWidthMm']\n        camera_data.sensor_fit = 'HORIZONTAL'\n        scene.camera = camera\n        scene.render.resolution_x = int(photo['width'])\n        scene.render.resolution_y = int(photo['height'])\n        scene.render.resolution_percentage = 100\n        scene.render.image_settings.file_format = 'PNG'\n        scene.render.film_transparent = True\n        origin = data['site']['rd']\n        scene['xDroneFit_RD_origin'] = [origin['x'], origin['y']]\n        for block in data.get('buildings', []):\n            collection = bpy.data.collections.get(block['typeName'])\n            if collection:\n                empty = bpy.data.objects.new('xDF_' + block['typeName'], None)\n                scene.collection.objects.link(empty)\n                empty.instance_type = 'COLLECTION'\n                empty.instance_collection = collection\n                empty.location = (block['rd']['x']-origin['x'], block['rd']['y']-origin['y'], block['elevationMeters'])\n                empty.rotation_euler[2] = math.radians(-block['rotationDegreesClockwise'])\n        self.report({'INFO'}, 'xDroneFit camera en woningankers geïmporteerd')\n        return {'FINISHED'}\n\ndef menu(self, context):\n    self.layout.operator(XDRONEFIT_OT_import.bl_idname, text='xDroneFit project (.json)')\n\ndef register():\n    bpy.utils.register_class(XDRONEFIT_OT_import)\n    bpy.types.TOPBAR_MT_file_import.append(menu)\n\ndef unregister():\n    bpy.types.TOPBAR_MT_file_import.remove(menu)\n    bpy.utils.unregister_class(XDRONEFIT_OT_import)\n\nif __name__ == '__main__':\n    register()\n`;
+    const script = `# xDroneFit Blender importer v3\nimport bpy, json, math, os\nfrom mathutils import Matrix, Vector\nfrom bpy_extras.io_utils import ImportHelper\n\nclass XDRONEFIT_OT_import(bpy.types.Operator, ImportHelper):\n    bl_idname = 'xdronefit.import_project'\n    bl_label = 'Import xDroneFit project'\n    filename_ext = '.json'\n    filter_glob: bpy.props.StringProperty(default='*.json;*.dronefit.json', options={'HIDDEN'})\n\n    def execute(self, context):\n        with open(self.filepath, 'r', encoding='utf-8') as handle:\n            data = json.load(handle)\n        solution = data.get('cameraSolution')\n        photo = data.get('photo')\n        if not solution or not photo:\n            self.report({'ERROR'}, 'Project bevat nog geen berekende camera')\n            return {'CANCELLED'}\n        folder = os.path.dirname(self.filepath)\n        assets = data.get('assets') or {}\n        scene = context.scene\n        scene.unit_settings.system = 'METRIC'\n        scene.unit_settings.scale_length = 1.0\n        camera_data = bpy.data.cameras.get('xDroneFit Camera') or bpy.data.cameras.new('xDroneFit Camera')\n        camera = bpy.data.objects.get('xDroneFit Camera') or bpy.data.objects.new('xDroneFit Camera', camera_data)\n        if camera.name not in scene.collection.objects:\n            scene.collection.objects.link(camera)\n        r = Matrix(solution['rotationWorldToCamera'])\n        cv_to_blender = Matrix(((1,0,0),(0,-1,0),(0,0,-1)))\n        rotation_world = r.transposed() @ cv_to_blender\n        location = Vector(solution['cameraLocalRd'])\n        camera.matrix_world = rotation_world.to_4x4()\n        camera.location = location\n        camera_data.lens = photo['focalLengthMm']\n        camera_data.sensor_width = photo['estimatedSensorWidthMm']\n        camera_data.sensor_fit = 'HORIZONTAL'\n        scene.camera = camera\n        scene.render.resolution_x = int(photo['width'])\n        scene.render.resolution_y = int(photo['height'])\n        scene.render.resolution_percentage = 100\n        scene.render.image_settings.file_format = 'PNG'\n        scene.render.film_transparent = True\n        photo_file = assets.get('photo')\n        if photo_file:\n            photo_path = os.path.join(folder, photo_file)\n            if os.path.exists(photo_path):\n                image = bpy.data.images.load(photo_path, check_existing=True)\n                camera_data.show_background_images = True\n                camera_data.background_images.clear()\n                background = camera_data.background_images.new()\n                background.image = image\n                background.display_depth = 'BACK'\n                background.frame_method = 'FIT'\n                background.show_background_image = True\n            else:\n                self.report({'WARNING'}, 'Dronefoto niet gevonden naast het projectbestand: ' + photo_file)\n        origin = data['site']['rd']\n        scene['xDroneFit_RD_origin'] = [origin['x'], origin['y']]\n        drawing = data.get('drawing')\n        if drawing and drawing.get('widthMeters'):\n            width = drawing['widthMeters']\n            height = width / (drawing.get('aspect') or 1.414)\n            bpy.ops.mesh.primitive_plane_add(size=1)\n            plane = context.active_object\n            plane.name = 'xDroneFit Situatietekening'\n            plane.scale = (width / 2, height / 2, 1)\n            drawing_rd = drawing.get('rd') or origin\n            plane.location = (drawing_rd['x'] - origin['x'], drawing_rd['y'] - origin['y'], 0)\n            plane.rotation_euler[2] = math.radians(-drawing.get('rotationDegreesClockwise', 0))\n            drawing_file = assets.get('drawing')\n            if drawing_file:\n                drawing_path = os.path.join(folder, drawing_file)\n                if os.path.exists(drawing_path):\n                    material = bpy.data.materials.new('xDroneFit Situatie Materiaal')\n                    material.use_nodes = True\n                    bsdf = material.node_tree.nodes.get('Principled BSDF')\n                    tex_image = material.node_tree.nodes.new('ShaderNodeTexImage')\n                    tex_image.image = bpy.data.images.load(drawing_path, check_existing=True)\n                    material.node_tree.links.new(bsdf.inputs['Base Color'], tex_image.outputs['Color'])\n                    if bsdf.inputs.get('Alpha') is not None:\n                        material.node_tree.links.new(bsdf.inputs['Alpha'], tex_image.outputs['Alpha'])\n                        material.blend_method = 'BLEND'\n                    plane.data.materials.append(material)\n                else:\n                    self.report({'WARNING'}, 'Situatietekening niet gevonden naast het projectbestand: ' + drawing_file)\n        for block in data.get('buildings', []):\n            collection = bpy.data.collections.get(block['typeName'])\n            if collection:\n                empty = bpy.data.objects.new('xDF_' + block['typeName'], None)\n                scene.collection.objects.link(empty)\n                empty.instance_type = 'COLLECTION'\n                empty.instance_collection = collection\n                empty.location = (block['rd']['x']-origin['x'], block['rd']['y']-origin['y'], block['elevationMeters'])\n                empty.rotation_euler[2] = math.radians(-block['rotationDegreesClockwise'])\n        self.report({'INFO'}, 'xDroneFit camera, achtergrondfoto en situatietekening geïmporteerd')\n        return {'FINISHED'}\n\ndef menu(self, context):\n    self.layout.operator(XDRONEFIT_OT_import.bl_idname, text='xDroneFit project (.json)')\n\ndef register():\n    bpy.utils.register_class(XDRONEFIT_OT_import)\n    bpy.types.TOPBAR_MT_file_import.append(menu)\n\ndef unregister():\n    bpy.types.TOPBAR_MT_file_import.remove(menu)\n    bpy.utils.unregister_class(XDRONEFIT_OT_import)\n\nif __name__ == '__main__':\n    register()\n`;
     const blob = new Blob([script], { type: "text/x-python" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob); link.download = "xdronefit_blender_import.py"; link.click(); URL.revokeObjectURL(link.href);
     setNotice("Blender-importer gedownload. Installeer hem via Edit > Preferences > Add-ons > Install from Disk.");
   }
-  function exportProject() {
+  function triggerDownload(blob: Blob, fileName: string) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+  async function exportProject() {
+    const solution = effectiveCameraSolution;
+    if (!solution) { setNotice("Upload eerst een dronefoto met GPS- en gimbalgegevens."); return; }
     const sensorWidth = drone?.focalLength && drone.focalLength35mm ? (drone.focalLength * 36) / drone.focalLength35mm : null;
     const siteRd = wgs84ToRd(site.lon, site.lat);
+    const baseName = projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project";
+    const photoFileName = drone ? `${baseName}-drone-foto.jpg` : null;
+    const drawingFileName = drawingName ? `${baseName}-situatie.png` : null;
     const payload = {
-      schema: "nl.xdronefit.project", version: 2,
+      schema: "nl.xdronefit.project", version: 3,
       project: { code: project.code, name: projectName, exportedAt: new Date().toISOString() },
       crs: { geographic: "EPSG:4326", horizontal: "EPSG:28992", vertical: "NAP (user supplied)", localOrigin: "site.rd" },
       site: { latitude: site.lat, longitude: site.lon, rd: { x: siteRd[0], y: siteRd[1] }, confirmed: siteConfirmed },
-      drawing: drawingName ? { fileName: drawingName, center: drawingCenter, widthMeters: drawingWidth, rotationDegreesClockwise: drawingRotation, opacity: drawingOpacity, registration: drawingControlPoints.filter((point) => point.lat != null).length >= 2 ? "two-point-similarity" : "manual", controlPoints: drawingControlPoints } : null,
+      assets: { photo: photoFileName, drawing: drawingFileName },
+      drawing: drawingName ? {
+        fileName: drawingName, center: drawingCenter,
+        rd: (() => { const rd = wgs84ToRd(drawingCenter.lon, drawingCenter.lat); return { x: rd[0], y: rd[1] }; })(),
+        aspect: drawingAspect, widthMeters: drawingWidth, rotationDegreesClockwise: drawingRotation, opacity: drawingOpacity,
+        registration: drawingControlPoints.filter((point) => point.lat != null).length >= 2 ? "two-point-similarity" : "manual", controlPoints: drawingControlPoints,
+      } : null,
       photo: drone ? {
         fileName: drone.fileName, width: drone.width, height: drone.height,
         latitude: drone.latitude, longitude: drone.longitude,
@@ -613,19 +646,24 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         return { id: building.id, typeName: building.typeName, latitude: building.lat, longitude: building.lon, rd: { x: rd[0], y: rd[1] }, rotationDegreesClockwise: building.rotation, elevationMeters: building.elevation };
       }),
       controlPoints: controlPoints.map((point) => ({ ...point, rd: (() => { const rd = wgs84ToRd(point.lon, point.lat); return { x: rd[0], y: rd[1] }; })() })),
-      cameraSolution,
+      cameraSolution: solution,
+      cameraSolutionSource: cameraSolution ? "point-match" : "exif-metadata",
       quality: cameraSolution ? { rmsPixels: cameraSolution.rmsPixels, maxErrorPixels: cameraSolution.maxErrorPixels, pointCount: controlPoints.filter((point) => point.imageX != null).length, status: cameraSolution.rmsPixels <= 4 ? "excellent" : cameraSolution.rmsPixels <= 10 ? "usable" : "review" } : null,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `${projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project"}.dronefit.json`;
-    link.click(); URL.revokeObjectURL(link.href);
-    setNotice(cameraSolution ? "Project met berekende camera geëxporteerd voor Blender." : "Project geëxporteerd zonder camera-oplossing.");
+    triggerDownload(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), `${baseName}.dronefit.json`);
+    if (photoFileName) {
+      const response = await fetch(`/api/projects/${project.id}/assets/photo`);
+      if (response.ok) triggerDownload(await response.blob(), photoFileName);
+    }
+    if (drawingFileName) {
+      const response = await fetch(`/api/projects/${project.id}/assets/drawing`);
+      if (response.ok) triggerDownload(await response.blob(), drawingFileName);
+    }
+    setNotice("Project, dronefoto en situatietekening gedownload. Zet ze in dezelfde map en importeer het .json-bestand in Blender.");
   }
 
   const drawingRegistered = drawingControlPoints.filter((point) => point.lat != null && point.lon != null).length >= 2;
-  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName) && drawingRegistered, Boolean(drone), buildings.length > 0, Boolean(cameraSolution)], [siteConfirmed, drawingName, drawingRegistered, drone, buildings, cameraSolution]);
+  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName) && drawingRegistered, Boolean(drone), buildings.length > 0, Boolean(effectiveCameraSolution)], [siteConfirmed, drawingName, drawingRegistered, drone, buildings, effectiveCameraSolution]);
   const firstIncompleteStep = completedSteps.findIndex((complete) => !complete);
   const activeStep = firstIncompleteStep === -1 ? completedSteps.length : firstIncompleteStep;
   const siteRdDisplay = wgs84ToRd(site.lon, site.lat);
@@ -635,7 +673,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       <header className="topbar">
         <div className="brand"><button className="back-projects" onClick={onBack}>Projecten</button><span className="xf-mark xf-small" aria-hidden="true"><i/><i/><i/><i/><b>x</b></span><span>xDrone<b className="fit-word">Fit</b></span><small>{project.code}</small></div>
         <label className="project-title"><span>Project</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-        <div className="top-actions"><button className="undo-button" onClick={undoLastChange} disabled={!canUndo} title="Laatste wijziging terugdraaien (Ctrl+Z)"><i />Ongedaan</button><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD New · EPSG:28992</span><button className="primary-button" onClick={exportProject} disabled={!cameraSolution}>Exporteer voor Blender</button></div>
+        <div className="top-actions"><button className="undo-button" onClick={undoLastChange} disabled={!canUndo} title="Laatste wijziging terugdraaien (Ctrl+Z)"><i />Ongedaan</button><button className="save-button" onClick={saveProject}>{saveState}</button><span className="crs-chip">RD New · EPSG:28992</span><button className="primary-button" onClick={exportProject} disabled={!effectiveCameraSolution}>Exporteer voor Blender</button></div>
       </header>
       <section className="workspace">
         <aside className="sidebar">
@@ -707,9 +745,14 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             </div>)}</div>}
           </section>
           <section className={`tool-card calibration-card ${collapsedSteps.camera ? "collapsed" : ""}`}>
-            <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /><CollapseButton collapsed={collapsedSteps.camera} label="Camera-match" onToggle={() => toggleStep("camera")} /></div>
+            <div className="card-heading"><span>05</span><div><h2>Camera</h2><p>Automatisch uit DJI-metadata. Puntmatching is optioneel voor extra precisie.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /><CollapseButton collapsed={collapsedSteps.camera} label="Camera-match" onToggle={() => toggleStep("camera")} /></div>
             {!drone && <p className="calibration-help">Upload eerst de originele DJI-foto.</p>}
-            {drone && <>
+            {drone && <div className={`quality-card ${cameraSolution ? "excellent" : "usable"}`}>
+              <span>CAMERABRON</span><strong>{cameraSolution ? "Puntmatching" : "EXIF-metadata"}</strong>
+              <p>{cameraSolution ? "Verfijnd met handmatig gekoppelde grondpunten." : "Positie, hoogte en kijkrichting rechtstreeks uit de dronefoto. Exporteer en verfijn de camera zo nodig visueel in Blender met de achtergrondfoto."}</p>
+            </div>}
+            {drone && <details className="advanced-matching">
+              <summary>Optioneel: precisie verbeteren met puntmatching</summary>
               <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId && !photoLoadFailed ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
                 <img src={drone.previewUrl} alt="DJI-dronefoto voor camerakalibratie" onLoad={() => setPhotoLoadFailed(false)} onError={() => setPhotoLoadFailed(true)} />
                 {controlPoints.filter((point) => point.imageX != null && point.imageY != null).map((point) => <span key={point.id} style={{ left: `${(point.imageX as number) / (drone.width || 1) * 100}%`, top: `${(point.imageY as number) / (drone.height || 1) * 100}%` }}>{controlPoints.findIndex((item) => item.id === point.id) + 1}</span>)}
@@ -729,8 +772,9 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
                 <p>{cameraSolution.rmsPixels <= 4 ? "Zeer sterke match" : cameraSolution.rmsPixels <= 10 ? "Bruikbaar, controleer de overlay" : "Punten opnieuw controleren"}</p>
                 <div><span>{controlPoints.filter((point) => point.imageX != null).length} punten</span><span>max {cameraSolution.maxErrorPixels.toFixed(1)} px</span></div>
               </div>}
-              <button className="secondary-button blender-addon" onClick={downloadBlenderImporter}>Download Blender-importer</button>
-            </>}
+              {cameraSolution && <button className="text-button" onClick={() => setCameraSolution(null)}>Terug naar EXIF-camera</button>}
+            </details>}
+            {drone && <button className="secondary-button blender-addon" onClick={downloadBlenderImporter}>Download Blender-importer</button>}
           </section>
         </aside>
         <section className="map-panel">
