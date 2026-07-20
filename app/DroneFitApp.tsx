@@ -11,6 +11,7 @@ type AddressResult = { id: string; label: string; lat: number; lon: number; kind
 type BuildingBlock = { id: string; typeName: string; lat: number; lon: number; rotation: number; elevation: number };
 type DroneData = {
   fileName: string; previewUrl: string;
+  assetRevision?: number;
   latitude: number | null; longitude: number | null;
   relativeAltitude: number | null; absoluteAltitude: number | null;
   gimbalYaw: number | null; gimbalPitch: number | null; gimbalRoll: number | null;
@@ -76,7 +77,8 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [drawingWidth, setDrawingWidth] = useState(saved.drawingWidth || 180);
   const [drawingRotation, setDrawingRotation] = useState(saved.drawingRotation || 0);
   const [drawingOpacity, setDrawingOpacity] = useState(saved.drawingOpacity || 0.58);
-  const [drone, setDrone] = useState<DroneData | null>(saved.drone ? { ...saved.drone, previewUrl: "/api/projects/" + project.id + "/assets/photo" } : null);
+  const [drone, setDrone] = useState<DroneData | null>(saved.drone ? { ...saved.drone, previewUrl: "/api/projects/" + project.id + "/assets/photo?v=" + (saved.drone.assetRevision ?? encodeURIComponent(project.updatedAt)) } : null);
+  const [photoLoadFailed, setPhotoLoadFailed] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("Zoek een adres of klik op de projectlocatie in de kaart.");
   const [addressQuery, setAddressQuery] = useState("");
@@ -183,6 +185,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           setPlacingControlPoint(false);
           setCameraSolution(null);
           setNotice("Kaartpunt geplaatst. Klik nu op exact hetzelfde punt in de dronefoto.");
+          window.setTimeout(() => photoMatchRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 80);
           return;
         }
         setSite({ lat: event.latlng.lat, lon: event.latlng.lng });
@@ -355,12 +358,23 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     setBusy("DJI-metadata uitlezen…");
     try {
       const buffer = await file.arrayBuffer();
-      await fetch("/api/projects/" + project.id + "/assets/photo", { method: "PUT", headers: { "Content-Type": file.type || "image/jpeg" }, body: file });
       const tags: any = await exifr.parse(buffer, { gps: true, tiff: true, exif: true, xmp: true, translateValues: true });
       const raw = new TextDecoder("latin1").decode(buffer);
       const bitmap = await createImageBitmap(file);
+      const previewScale = Math.min(1, 2400 / bitmap.width);
+      const previewCanvas = document.createElement("canvas");
+      previewCanvas.width = Math.round(bitmap.width * previewScale);
+      previewCanvas.height = Math.round(bitmap.height * previewScale);
+      const previewContext = previewCanvas.getContext("2d");
+      if (!previewContext) throw new Error("Voorvertoning kon niet worden gemaakt");
+      previewContext.drawImage(bitmap, 0, 0, previewCanvas.width, previewCanvas.height);
+      const previewBlob = await new Promise<Blob | null>((resolve) => previewCanvas.toBlob(resolve, "image/jpeg", 0.9));
+      if (!previewBlob) throw new Error("Voorvertoning kon niet worden opgeslagen");
+      const upload = await fetch("/api/projects/" + project.id + "/assets/photo", { method: "PUT", headers: { "Content-Type": "image/jpeg" }, body: previewBlob });
+      if (!upload.ok) throw new Error(`Foto-opslag gaf status ${upload.status}`);
+      const assetRevision = Date.now();
       const next: DroneData = {
-        fileName: file.name, previewUrl: URL.createObjectURL(file),
+        fileName: file.name, previewUrl: URL.createObjectURL(previewBlob), assetRevision,
         latitude: readDjiAttribute(raw, "GpsLatitude") ?? tags?.latitude ?? null,
         longitude: readDjiAttribute(raw, "GpsLongitude") ?? tags?.longitude ?? null,
         relativeAltitude: readDjiAttribute(raw, "RelativeAltitude"),
@@ -374,6 +388,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         capturedAt: tags?.DateTimeOriginal instanceof Date ? tags.DateTimeOriginal.toISOString() : String(tags?.DateTimeOriginal ?? ""),
       };
       bitmap.close();
+      setPhotoLoadFailed(false);
       setDrone((current) => { if (current?.previewUrl) URL.revokeObjectURL(current.previewUrl); return next; });
       if (next.latitude != null && next.longitude != null) mapInstance.current?.setView([next.latitude, next.longitude], Math.max(mapInstance.current.getZoom(), 17));
       setNotice("Dronecamera gevonden. Controleer de positie en kijkrichting op de kaart.");
@@ -492,7 +507,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           <section className="tool-card">
             <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div></div>
             <label className={`dropzone photo-dropzone ${drone ? "loaded" : ""}`} style={drone ? { backgroundImage: `linear-gradient(90deg, rgba(7,22,25,.88), rgba(7,22,25,.4)), url(${drone.previewUrl})` } : undefined}>
-              <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
+              <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{photoLoadFailed ? "Selecteer de originele DJI JPEG opnieuw" : drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{photoLoadFailed ? "De metadata staat er nog; alleen de fotovoorvertoning ontbreekt" : drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
             </label>
             {drone && <>
               <div className="metadata-grid">
@@ -524,12 +539,12 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div></div>
             {!drone && <p className="calibration-help">Upload eerst de originele DJI-foto.</p>}
             {drone && <>
-              <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
-                <img src={drone.previewUrl} alt="DJI-dronefoto voor camerakalibratie" />
+              <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId && !photoLoadFailed ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
+                <img src={drone.previewUrl} alt="DJI-dronefoto voor camerakalibratie" onLoad={() => setPhotoLoadFailed(false)} onError={() => setPhotoLoadFailed(true)} />
                 {controlPoints.filter((point) => point.imageX != null && point.imageY != null).map((point) => <span key={point.id} style={{ left: `${(point.imageX as number) / (drone.width || 1) * 100}%`, top: `${(point.imageY as number) / (drone.height || 1) * 100}%` }}>{controlPoints.findIndex((item) => item.id === point.id) + 1}</span>)}
-                {pendingControlId && <b>Klik hetzelfde punt in de foto</b>}
+                {photoLoadFailed ? <div className="photo-recovery"><strong>Voorvertoning ontbreekt</strong><small>Klik hierboven bij DJI-dronefoto en selecteer één keer opnieuw het originele bestand.</small></div> : pendingControlId && <b>Klik hetzelfde punt in de foto</b>}
               </div>
-              <button className={placingControlPoint ? "primary-button" : "secondary-button"} onClick={() => { setPlacingControlPoint((current) => !current); setPlacingBuilding(false); setPendingControlId(null); setNotice(placingControlPoint ? "Referentiepunt geannuleerd." : "Klik een goed herkenbaar grondpunt op de kaart."); }}>{placingControlPoint ? "Klik nu op de kaart…" : "+ Voeg referentiepunt toe"}</button>
+              <button className={placingControlPoint ? "primary-button" : "secondary-button"} disabled={photoLoadFailed} onClick={() => { const next = !placingControlPoint; placingControlPointRef.current = next; placingBuildingRef.current = false; setPlacingControlPoint(next); setPlacingBuilding(false); setPendingControlId(null); setNotice(next ? "Klik een goed herkenbaar grondpunt op de kaart." : "Referentiepunt geannuleerd."); }}>{placingControlPoint ? "Klik nu op de kaart…" : "+ Voeg referentiepunt toe"}</button>
               {controlPoints.length > 0 && <div className="control-list">{controlPoints.map((point, index) => <div className={point.imageX == null ? "pending" : "complete"} key={point.id}>
                 <span><b>{index + 1}</b>{point.imageX == null ? "Wacht op fotopunt" : `Foto ${Math.round(point.imageX)}, ${Math.round(point.imageY as number)} px`}</span>
                 <label>NAP/peil <input type="number" step="0.1" value={point.elevation} onChange={(event) => { setControlPoints((current) => current.map((item) => item.id === point.id ? { ...item, elevation: Number(event.target.value) } : item)); setCameraSolution(null); }} /></label>
@@ -549,6 +564,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         </aside>
         <section className="map-panel">
           <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
+          {placingControlPoint && <div className="map-pick-banner"><span>1</span><div><b>Kies een referentiepunt</b><small>Klik bijvoorbeeld op een hoek van een wegmarkering, putdeksel of erfgrens.</small></div></div>}
           <div className="address-search">
             <div className="address-input-wrap">
               <span aria-hidden="true">⌕</span>
