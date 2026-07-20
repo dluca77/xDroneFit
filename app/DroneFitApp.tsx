@@ -4,11 +4,13 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import * as exifr from "exifr";
 import "leaflet/dist/leaflet.css";
 import type { ProjectRecord } from "./ProjectPortal";
-import { solvePlanarCamera, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
+import { solvePlanarCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
 
 type SitePosition = { lat: number; lon: number };
 type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
 type BuildingBlock = { id: string; typeName: string; lat: number; lon: number; rotation: number; elevation: number };
+type DrawingControlPoint = { id: string; imageX: number; imageY: number; lat: number | null; lon: number | null };
+type LayerVisibility = { project: boolean; drawing: boolean; drone: boolean; buildings: boolean; references: boolean };
 type DroneData = {
   fileName: string; previewUrl: string;
   assetRevision?: number;
@@ -58,6 +60,10 @@ function formatNumber(value: number | null, digits = 2) {
   return value == null ? "—" : value.toFixed(digits);
 }
 
+function LayerEye({ shown, label, onToggle }: { shown: boolean; label: string; onToggle: () => void }) {
+  return <button type="button" className={`layer-eye ${shown ? "shown" : "hidden"}`} aria-label={`${label} ${shown ? "verbergen" : "tonen"}`} aria-pressed={shown} onClick={onToggle}><i /></button>;
+}
+
 export default function DroneFitApp({ project, onBack }: { project: ProjectRecord; onBack: () => void }) {
   let saved: any = {};
   try { saved = JSON.parse(project.stateJson || "{}"); } catch { saved = {}; }
@@ -66,6 +72,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const mapLeaflet = useRef<any>(null);
   const markerLayer = useRef<any>(null);
   const drawingLayer = useRef<any>(null);
+  const drawingPreviewRef = useRef<HTMLDivElement>(null);
   const photoMatchRef = useRef<HTMLDivElement>(null);
 
   const [projectName, setProjectName] = useState(saved.projectName || project.name);
@@ -77,6 +84,9 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [drawingWidth, setDrawingWidth] = useState(saved.drawingWidth || 180);
   const [drawingRotation, setDrawingRotation] = useState(saved.drawingRotation || 0);
   const [drawingOpacity, setDrawingOpacity] = useState(saved.drawingOpacity || 0.58);
+  const [drawingCenter, setDrawingCenter] = useState<SitePosition>(saved.drawingCenter || saved.site || INITIAL_SITE);
+  const [drawingControlPoints, setDrawingControlPoints] = useState<DrawingControlPoint[]>(saved.drawingControlPoints || []);
+  const [pendingDrawingMapId, setPendingDrawingMapId] = useState<string | null>(null);
   const [drone, setDrone] = useState<DroneData | null>(saved.drone ? { ...saved.drone, previewUrl: "/api/projects/" + project.id + "/assets/photo?v=" + (saved.drone.assetRevision ?? encodeURIComponent(project.updatedAt)) } : null);
   const [photoLoadFailed, setPhotoLoadFailed] = useState(false);
   const [busy, setBusy] = useState("");
@@ -92,22 +102,25 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [placingControlPoint, setPlacingControlPoint] = useState(false);
   const [pendingControlId, setPendingControlId] = useState<string | null>(null);
   const [cameraSolution, setCameraSolution] = useState<CameraSolution | null>(saved.cameraSolution || null);
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(saved.layerVisibility || { project: true, drawing: true, drone: true, buildings: true, references: true });
   const placingBuildingRef = useRef(false);
   const buildingTypeRef = useRef("Tweekapper 1");
   const placingControlPointRef = useRef(false);
+  const pendingDrawingMapIdRef = useRef<string | null>(null);
 
   useEffect(() => { placingBuildingRef.current = placingBuilding; }, [placingBuilding]);
   useEffect(() => { buildingTypeRef.current = buildingType; }, [buildingType]);
   useEffect(() => { placingControlPointRef.current = placingControlPoint; }, [placingControlPoint]);
+  useEffect(() => { pendingDrawingMapIdRef.current = pendingDrawingMapId; }, [pendingDrawingMapId]);
   const [saveState, setSaveState] = useState("Opgeslagen");
   async function saveProject() {
     setSaveState("Opslaan...");
     const safeDrone = drone ? { ...drone, previewUrl: "" } : null;
-    const state = { projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, hasDrawing: Boolean(drawingName), drone: safeDrone, buildings, controlPoints, cameraSolution };
+    const state = { projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, hasDrawing: Boolean(drawingName), drone: safeDrone, buildings, controlPoints, cameraSolution, layerVisibility };
     const response = await fetch("/api/projects/" + project.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: project.code, name: projectName, state }) });
     setSaveState(response.ok ? "Opgeslagen" : "Opslaan mislukt");
   }
-  useEffect(() => { const timer = window.setTimeout(saveProject, 1200); return () => window.clearTimeout(timer); }, [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drone, buildings, controlPoints, cameraSolution]);
+  useEffect(() => { const timer = window.setTimeout(saveProject, 1200); return () => window.clearTimeout(timer); }, [projectName, site, siteConfirmed, drawingName, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, drawingControlPoints, drone, buildings, controlPoints, cameraSolution, layerVisibility]);
 
   useEffect(() => {
     const query = addressQuery.trim();
@@ -153,6 +166,25 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   }, [addressQuery]);
 
   useEffect(() => {
+    const complete = drawingControlPoints.filter((point) => point.lat != null && point.lon != null);
+    if (complete.length < 2) return;
+    const [first, second] = complete;
+    try {
+      const registration = solveTwoPointDrawingRegistration(
+        { imageX: first.imageX, imageY: first.imageY, lon: first.lon as number, lat: first.lat as number },
+        { imageX: second.imageX, imageY: second.imageY, lon: second.lon as number, lat: second.lat as number },
+        drawingAspect,
+      );
+      setDrawingWidth(Math.max(10, Math.min(1000, Math.round(registration.widthMeters * 10) / 10)));
+      setDrawingRotation(Math.round(registration.rotationDegrees * 10) / 10);
+      setDrawingCenter(registration.center);
+      setNotice("Situatiekaart berekend uit twee gekoppelde punten. Gebruik het kaartanker voor een kleine nacorrectie.");
+    } catch (error) {
+      setNotice(error instanceof Error ? `${error.message} Kies punten verder uit elkaar.` : "Situatiekaart kon niet worden berekend.");
+    }
+  }, [drawingControlPoints, drawingAspect]);
+
+  useEffect(() => {
     let cancelled = false;
     async function createMap() {
       if (!mapElement.current || mapInstance.current) return;
@@ -172,8 +204,17 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       L.control.layers({ Luchtfoto: luchtfoto, Kaart: osm }, { Kadaster: kadaster }, { position: "topright" }).addTo(map);
       markerLayer.current = L.layerGroup().addTo(map);
       map.on("click", (event: any) => {
+        if (pendingDrawingMapIdRef.current) {
+          const id = pendingDrawingMapIdRef.current;
+          setDrawingControlPoints((current) => current.map((point) => point.id === id ? { ...point, lat: event.latlng.lat, lon: event.latlng.lng } : point));
+          pendingDrawingMapIdRef.current = null;
+          setPendingDrawingMapId(null);
+          setNotice("Kaartpunt gekoppeld. Kies nu het volgende punt op de situatietekening.");
+          return;
+        }
         if (placingBuildingRef.current) {
           setBuildings((current) => [...current, { id: crypto.randomUUID(), typeName: buildingTypeRef.current, lat: event.latlng.lat, lon: event.latlng.lng, rotation: 0, elevation: 0 }]);
+          placingBuildingRef.current = false;
           setPlacingBuilding(false);
           setNotice("Woninganker geplaatst.");
           return;
@@ -182,6 +223,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           const id = crypto.randomUUID();
           setControlPoints((current) => [...current, { id, label: `P${current.length + 1}`, lat: event.latlng.lat, lon: event.latlng.lng, elevation: 0, imageX: null, imageY: null }]);
           setPendingControlId(id);
+          placingControlPointRef.current = false;
           setPlacingControlPoint(false);
           setCameraSolution(null);
           setNotice("Kaartpunt geplaatst. Klik nu op exact hetzelfde punt in de dronefoto.");
@@ -204,9 +246,9 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     const layer = markerLayer.current;
     if (!L || !layer) return;
     layer.clearLayers();
-    L.circleMarker([site.lat, site.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#ff5d2e", fillOpacity: 1 })
+    if (layerVisibility.project) L.circleMarker([site.lat, site.lon], { radius: 9, color: "#fff", weight: 3, fillColor: "#ff5d2e", fillOpacity: 1 })
       .bindTooltip("Projectanker", { permanent: true, direction: "top", offset: [0, -10] }).addTo(layer);
-    buildings.forEach((building, index) => {
+    (layerVisibility.buildings ? buildings : []).forEach((building, index) => {
       const buildingIcon = L.divIcon({ className: "building-pin", html: `<span style="transform:rotate(${building.rotation}deg)">${index + 1}</span>`, iconSize: [36, 36], iconAnchor: [18, 18] });
       const marker = L.marker([building.lat, building.lon], { icon: buildingIcon, draggable: true })
         .bindTooltip(`${building.typeName} · ${building.rotation}°`, { direction: "top", offset: [0, -16] }).addTo(layer);
@@ -215,7 +257,21 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, lat: point.lat, lon: point.lng } : item));
       });
     });
-    controlPoints.forEach((point, index) => {
+    if (drawingImage && layerVisibility.drawing) {
+      const drawingIcon = L.divIcon({ className: "drawing-anchor-pin", html: "<span><i></i></span>", iconSize: [34, 34], iconAnchor: [17, 17] });
+      const drawingMarker = L.marker([drawingCenter.lat, drawingCenter.lon], { icon: drawingIcon, draggable: true, zIndexOffset: 650 })
+        .bindTooltip("Situatiekaart · versleep voor nacorrectie", { permanent: true, direction: "top", offset: [0, -16] }).addTo(layer);
+      drawingMarker.on("dragend", (event: any) => {
+        const position = event.target.getLatLng();
+        setDrawingCenter({ lat: position.lat, lon: position.lng });
+        setNotice("Situatiekaart handmatig verschoven.");
+      });
+      drawingControlPoints.filter((point) => point.lat != null && point.lon != null).forEach((point, index) => {
+        L.circleMarker([point.lat as number, point.lon as number], { radius: 7, color: "#fff", weight: 2, fillColor: "#f0a400", fillOpacity: 1 })
+          .bindTooltip(`Situatiepunt ${index + 1}`, { permanent: true, direction: "right", offset: [7, 0] }).addTo(layer);
+      });
+    }
+    (layerVisibility.references ? controlPoints : []).forEach((point, index) => {
       const complete = point.imageX != null && point.imageY != null;
       const icon = L.divIcon({ className: `control-pin ${complete ? "complete" : "pending"}`, html: `<span>${index + 1}</span>`, iconSize: [30, 30], iconAnchor: [15, 15] });
       const marker = L.marker([point.lat, point.lon], { icon, draggable: true })
@@ -225,7 +281,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         setControlPoints((current) => current.map((item) => item.id === point.id ? { ...item, lat: position.lat, lon: position.lng } : item));
         setCameraSolution(null);
       });
-    });    if (drone?.latitude != null && drone.longitude != null) {
+    });    if (layerVisibility.drone && drone?.latitude != null && drone.longitude != null) {
       const solvedWgs = cameraSolution ? rdToWgs84(cameraSolution.cameraRd[0], cameraSolution.cameraRd[1]) : null;
       const position: [number, number] = solvedWgs ? [solvedWgs[1], solvedWgs[0]] : [drone.latitude, drone.longitude];
       const solvedForward = cameraSolution?.rotationWorldToCamera[2];
@@ -283,23 +339,23 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         setNotice("Dronepositie handmatig gecorrigeerd.");
       });
     }
-  }, [site, drone, buildings, controlPoints, cameraSolution]);
+  }, [site, drone, buildings, controlPoints, cameraSolution, drawingImage, drawingCenter, drawingControlPoints, layerVisibility]);
 
   useEffect(() => {
     const L = mapLeaflet.current;
     const map = mapInstance.current;
     if (!L || !map) return;
     if (drawingLayer.current) { map.removeLayer(drawingLayer.current); drawingLayer.current = null; }
-    if (!drawingImage) return;
+    if (!drawingImage || !layerVisibility.drawing) return;
     const heightMeters = drawingWidth / drawingAspect;
-    const diagonal = Math.hypot(drawingWidth, heightMeters) / 2;
-    const southWest = destination(site.lat, site.lon, 225, diagonal);
-    const northEast = destination(site.lat, site.lon, 45, diagonal);
-    const overlay = L.imageOverlay(drawingImage, [southWest, northEast], { opacity: drawingOpacity, interactive: false, className: "drawing-overlay" }).addTo(map);
+    const centerRd = wgs84ToRd(drawingCenter.lon, drawingCenter.lat);
+    const southWestWgs = rdToWgs84(centerRd[0] - drawingWidth / 2, centerRd[1] - heightMeters / 2);
+    const northEastWgs = rdToWgs84(centerRd[0] + drawingWidth / 2, centerRd[1] + heightMeters / 2);
+    const overlay = L.imageOverlay(drawingImage, [[southWestWgs[1], southWestWgs[0]], [northEastWgs[1], northEastWgs[0]]], { opacity: drawingOpacity, interactive: false, className: "drawing-overlay" }).addTo(map);
     overlay.on("load", () => { const element = overlay.getElement(); if (element) element.style.rotate = `${drawingRotation}deg`; });
     drawingLayer.current = overlay;
     return () => { if (drawingLayer.current === overlay) { map.removeLayer(overlay); drawingLayer.current = null; } };
-  }, [drawingImage, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, site]);
+  }, [drawingImage, drawingAspect, drawingWidth, drawingRotation, drawingOpacity, drawingCenter, layerVisibility.drawing]);
 
   function selectAddress(result: AddressResult) {
     const position = { lat: result.lat, lon: result.lon };
@@ -328,6 +384,30 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     }
   }
 
+  function handleDrawingPoint(event: React.MouseEvent<HTMLDivElement>) {
+    if (!drawingImage || pendingDrawingMapId) return;
+    if (drawingControlPoints.length >= 2) {
+      setNotice("De situatiekaart is al met twee punten berekend. Kies ‘Registratie opnieuw’ om nieuwe punten te plaatsen.");
+      return;
+    }
+    const image = event.currentTarget.querySelector("img");
+    if (!image) return;
+    const rect = image.getBoundingClientRect();
+    const imageX = (event.clientX - rect.left) / rect.width;
+    const imageY = (event.clientY - rect.top) / rect.height;
+    if (imageX < 0 || imageX > 1 || imageY < 0 || imageY > 1) return;
+    const id = crypto.randomUUID();
+    setDrawingControlPoints((current) => [...current, { id, imageX, imageY, lat: null, lon: null }]);
+    pendingDrawingMapIdRef.current = id;
+    setPendingDrawingMapId(id);
+    placingBuildingRef.current = false;
+    placingControlPointRef.current = false;
+    setPlacingBuilding(false);
+    setPlacingControlPoint(false);
+    setLayerVisibility((current) => ({ ...current, drawing: true }));
+    setNotice(`Punt ${drawingControlPoints.length + 1} op de tekening gekozen. Klik nu exact hetzelfde punt op de kaart.`);
+  }
+
   async function handleDrawing(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -344,6 +424,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       if (!context) throw new Error("Canvas kon niet worden aangemaakt");
       await page.render({ canvas, canvasContext: context, viewport }).promise;
       setDrawingName(file.name); setDrawingAspect(viewport.width / viewport.height); setDrawingImage(canvas.toDataURL("image/png"));
+      setDrawingCenter(site); setDrawingControlPoints([]); setPendingDrawingMapId(null); pendingDrawingMapIdRef.current = null;
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
       if (blob) await fetch("/api/projects/" + project.id + "/assets/drawing", { method: "PUT", headers: { "Content-Type": "image/png" }, body: blob });
       setNotice("Situatietekening geladen. Stel schaal, rotatie en dekking af op de luchtfoto.");
@@ -441,7 +522,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       project: { code: project.code, name: projectName, exportedAt: new Date().toISOString() },
       crs: { geographic: "EPSG:4326", horizontal: "EPSG:28992", vertical: "NAP (user supplied)", localOrigin: "site.rd" },
       site: { latitude: site.lat, longitude: site.lon, rd: { x: siteRd[0], y: siteRd[1] }, confirmed: siteConfirmed },
-      drawing: drawingName ? { fileName: drawingName, widthMeters: drawingWidth, rotationDegreesClockwise: drawingRotation, opacity: drawingOpacity, registration: "visual-only" } : null,
+      drawing: drawingName ? { fileName: drawingName, center: drawingCenter, widthMeters: drawingWidth, rotationDegreesClockwise: drawingRotation, opacity: drawingOpacity, registration: drawingControlPoints.filter((point) => point.lat != null).length >= 2 ? "two-point-similarity" : "manual", controlPoints: drawingControlPoints } : null,
       photo: drone ? {
         fileName: drone.fileName, width: drone.width, height: drone.height,
         latitude: drone.latitude, longitude: drone.longitude,
@@ -466,8 +547,10 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     setNotice(cameraSolution ? "Project met berekende camera geëxporteerd voor Blender." : "Project geëxporteerd zonder camera-oplossing.");
   }
 
-  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName), Boolean(drone), buildings.length > 0, Boolean(cameraSolution)], [siteConfirmed, drawingName, drone, buildings, cameraSolution]);
-  const activeStep = completedSteps.filter(Boolean).length;
+  const drawingRegistered = drawingControlPoints.filter((point) => point.lat != null && point.lon != null).length >= 2;
+  const completedSteps = useMemo(() => [siteConfirmed, Boolean(drawingName) && drawingRegistered, Boolean(drone), buildings.length > 0, Boolean(cameraSolution)], [siteConfirmed, drawingName, drawingRegistered, drone, buildings, cameraSolution]);
+  const firstIncompleteStep = completedSteps.findIndex((complete) => !complete);
+  const activeStep = firstIncompleteStep === -1 ? completedSteps.length : firstIncompleteStep;
   const siteRdDisplay = wgs84ToRd(site.lon, site.lat);
 
   return (
@@ -488,7 +571,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
           </div>
           <div className="status-message"><i />{busy || notice}</div>
           <section className="tool-card">
-            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div></div>
+            <div className="card-heading"><span>01</span><div><h2>Projectlocatie</h2><p>Klik op de exacte locatie in de luchtfoto.</p></div><LayerEye shown={layerVisibility.project} label="Projectanker" onToggle={() => setLayerVisibility((current) => ({ ...current, project: !current.project }))} /></div>
             <div className="coordinate-grid">
               <label>Breedtegraad<input type="number" step="0.000001" value={site.lat} onChange={(e) => setSite({ ...site, lat: Number(e.target.value) })} /></label>
               <label>Lengtegraad<input type="number" step="0.000001" value={site.lon} onChange={(e) => setSite({ ...site, lon: Number(e.target.value) })} /></label>
@@ -496,16 +579,27 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             <button className="secondary-button" onClick={() => { setSiteConfirmed(true); mapInstance.current?.setView([site.lat, site.lon], 18); }}>Bevestig locatie</button>
           </section>
           <section className="tool-card">
-            <div className="card-heading"><span>02</span><div><h2>Situatietekening</h2><p>Upload de PDF en lijn hem uit op de kaart.</p></div></div>
+            <div className="card-heading"><span>02</span><div><h2>Situatietekening</h2><p>Koppel twee punten; xDroneFit berekent de plaatsing.</p></div><LayerEye shown={layerVisibility.drawing} label="Situatiekaart" onToggle={() => setLayerVisibility((current) => ({ ...current, drawing: !current.drawing }))} /></div>
             <label className={`dropzone ${drawingName ? "loaded" : ""}`}><input type="file" accept="application/pdf" onChange={handleDrawing} /><strong>{drawingName || "Kies situatie-PDF"}</strong><small>{drawingName ? "PDF zichtbaar als kaartoverlay" : "Eerste pagina wordt gebruikt"}</small></label>
+            {drawingName && <div className="drawing-registration">
+              <div className={`drawing-point-picker ${pendingDrawingMapId ? "waiting-map" : ""}`} ref={drawingPreviewRef} onClick={handleDrawingPoint} role="button" tabIndex={0} aria-label="Referentiepunt op situatietekening kiezen">
+                <img src={drawingImage} alt="Situatietekening voor registratie" />
+                {drawingControlPoints.map((point, index) => <span key={point.id} className={point.lat == null ? "pending" : "complete"} style={{ left: `${point.imageX * 100}%`, top: `${point.imageY * 100}%` }}>{index + 1}</span>)}
+                <b>{pendingDrawingMapId ? "Klik hetzelfde punt op de kaart" : drawingControlPoints.length < 2 ? `Klik punt ${drawingControlPoints.length + 1} op de tekening` : "Situatiekaart berekend"}</b>
+              </div>
+              <div className="registration-progress">
+                {[0, 1].map((index) => <span className={drawingControlPoints[index]?.lat != null ? "done" : drawingControlPoints[index] ? "active" : ""} key={index}><i>{index + 1}</i>{drawingControlPoints[index]?.lat != null ? "Gekoppeld" : drawingControlPoints[index] ? "Klik op kaart" : "Nog kiezen"}</span>)}
+              </div>
+              {drawingControlPoints.length > 0 && <button className="text-button" onClick={() => { setDrawingControlPoints([]); setPendingDrawingMapId(null); pendingDrawingMapIdRef.current = null; setNotice("Registratie gewist. Klik opnieuw twee punten op de situatietekening."); }}>Registratie opnieuw</button>}
+            </div>}
             {drawingName && <div className="slider-stack">
-              <label><span>Breedte <b>{drawingWidth} m</b></span><input type="range" min="40" max="400" value={drawingWidth} onChange={(e) => setDrawingWidth(Number(e.target.value))} /></label>
-              <label><span>Rotatie <b>{drawingRotation}°</b></span><input type="range" min="-180" max="180" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
+              <label><span>Breedte <b>{drawingWidth} m</b></span><input type="range" min="10" max="1000" step="0.1" value={drawingWidth} onChange={(e) => setDrawingWidth(Number(e.target.value))} /></label>
+              <label><span>Rotatie <b>{drawingRotation}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drawingRotation} onChange={(e) => setDrawingRotation(Number(e.target.value))} /></label>
               <label><span>Dekking <b>{Math.round(drawingOpacity * 100)}%</b></span><input type="range" min="0.1" max="0.9" step="0.05" value={drawingOpacity} onChange={(e) => setDrawingOpacity(Number(e.target.value))} /></label>
             </div>}
           </section>
           <section className="tool-card">
-            <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div></div>
+            <div className="card-heading"><span>03</span><div><h2>DJI-dronefoto</h2><p>De originele JPEG bevat positie en camera.</p></div><LayerEye shown={layerVisibility.drone} label="Drone en kijksector" onToggle={() => setLayerVisibility((current) => ({ ...current, drone: !current.drone }))} /></div>
             <label className={`dropzone photo-dropzone ${drone ? "loaded" : ""}`} style={drone ? { backgroundImage: `linear-gradient(90deg, rgba(7,22,25,.88), rgba(7,22,25,.4)), url(${drone.previewUrl})` } : undefined}>
               <input type="file" accept="image/jpeg" onChange={handleDronePhoto} /><strong>{photoLoadFailed ? "Selecteer de originele DJI JPEG opnieuw" : drone?.fileName || "Kies originele DJI JPEG"}</strong><small>{photoLoadFailed ? "De metadata staat er nog; alleen de fotovoorvertoning ontbreekt" : drone ? `${drone.width} × ${drone.height} px` : "EXIF en DJI-XMP worden automatisch gelezen"}</small>
             </label>
@@ -525,10 +619,10 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             </>}
           </section>
           <section className="tool-card">
-            <div className="card-heading"><span>04</span><div><h2>Woningblokken</h2><p>Plaats de ankerpunten van de Blender-collecties.</p></div></div>
+            <div className="card-heading"><span>04</span><div><h2>Woningblokken</h2><p>Plaats de ankerpunten van de Blender-collecties.</p></div><LayerEye shown={layerVisibility.buildings} label="Woningblokken" onToggle={() => setLayerVisibility((current) => ({ ...current, buildings: !current.buildings }))} /></div>
             <label className="field-label">Collectienaam in Blender<input value={buildingType} onChange={(event) => setBuildingType(event.target.value)} list="building-types" /></label>
             <datalist id="building-types"><option value="Tweekapper 1" /><option value="Tweekapper 2" /><option value="Tweekapper 3" /><option value="Tweekapper 4" /></datalist>
-            <button className={placingBuilding ? "primary-button" : "secondary-button"} onClick={() => { setPlacingBuilding((current) => !current); setNotice(placingBuilding ? "Plaatsen geannuleerd." : "Klik nu op het woninganker in de kaart."); }}>{placingBuilding ? "Klik nu in de kaart…" : "+ Plaats woningblok"}</button>
+            <button className={placingBuilding ? "primary-button" : "secondary-button"} onClick={() => { const next = !placingBuilding; placingBuildingRef.current = next; placingControlPointRef.current = false; setPlacingBuilding(next); setPlacingControlPoint(false); setLayerVisibility((current) => ({ ...current, buildings: true })); setNotice(next ? "Klik nu op het woninganker in de kaart." : "Plaatsen geannuleerd."); }}>{placingBuilding ? "Klik nu in de kaart…" : "+ Plaats woningblok"}</button>
             {buildings.length > 0 && <div className="building-list">{buildings.map((building, index) => <div className="building-row" key={building.id}>
               <div><b>{index + 1}. {building.typeName}</b><button title="Verwijder woningblok" onClick={() => setBuildings((current) => current.filter((item) => item.id !== building.id))}>×</button></div>
               <label><span>Rotatie <b>{building.rotation}°</b></span><input type="range" min="-180" max="180" value={building.rotation} onChange={(event) => setBuildings((current) => current.map((item) => item.id === building.id ? { ...item, rotation: Number(event.target.value) } : item))} /></label>
@@ -536,7 +630,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             </div>)}</div>}
           </section>
           <section className="tool-card calibration-card">
-            <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div></div>
+            <div className="card-heading"><span>05</span><div><h2>Camera-match</h2><p>Koppel dezelfde vaste grondpunten op kaart en foto.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /></div>
             {!drone && <p className="calibration-help">Upload eerst de originele DJI-foto.</p>}
             {drone && <>
               <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId && !photoLoadFailed ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
@@ -564,6 +658,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         </aside>
         <section className="map-panel">
           <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
+          {pendingDrawingMapId && <div className="map-pick-banner drawing-pick"><span>{drawingControlPoints.findIndex((point) => point.id === pendingDrawingMapId) + 1}</span><div><b>Koppel het situatiepunt</b><small>Klik exact hetzelfde herkenbare punt op de luchtfoto.</small></div></div>}
           {placingControlPoint && <div className="map-pick-banner"><span>1</span><div><b>Kies een referentiepunt</b><small>Klik bijvoorbeeld op een hoek van een wegmarkering, putdeksel of erfgrens.</small></div></div>}
           <div className="address-search">
             <div className="address-input-wrap">
@@ -594,7 +689,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
               </button>)}
             </div>}
           </div>
-          <div className="map-title"><span>Kaart &amp; situatielaag</span><small>{placingControlPoint ? "Klik een herkenbaar grondpunt" : placingBuilding ? "Klik om het woningblok te plaatsen" : "Klik om het projectanker te verplaatsen"}</small></div>
+          <div className="map-title"><span>Kaart &amp; situatielaag</span><small>{pendingDrawingMapId ? "Klik hetzelfde situatiepunt op de luchtfoto" : placingControlPoint ? "Klik een herkenbaar grondpunt" : placingBuilding ? "Klik om het woningblok te plaatsen" : "Klik om het projectanker te verplaatsen"}</small></div>
           <div className="legend"><span><i className="site-dot" />Project</span><span><i className="drone-dot" />Drone</span><span><i className="building-dot" />Woning</span><span><i className="control-dot" />Referentie</span><span><i className="drawing-swatch" />Situatie-PDF</span></div>
           <div className="map-readout"><span>RD NEW</span><b>X {siteRdDisplay[0].toFixed(2)}</b><b>Y {siteRdDisplay[1].toFixed(2)}</b></div>
         </section>

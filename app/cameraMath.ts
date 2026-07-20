@@ -39,6 +39,33 @@ export function rdToWgs84(x: number, y: number): [number, number] {
   return [result[0], result[1]];
 }
 
+export function solveTwoPointDrawingRegistration(
+  first: { imageX: number; imageY: number; lon: number; lat: number },
+  second: { imageX: number; imageY: number; lon: number; lat: number },
+  drawingAspect: number,
+): { center: { lat: number; lon: number }; widthMeters: number; rotationDegrees: number } {
+  const firstRd = wgs84ToRd(first.lon, first.lat);
+  const secondRd = wgs84ToRd(second.lon, second.lat);
+  const mapEast = secondRd[0] - firstRd[0];
+  const mapNorth = secondRd[1] - firstRd[1];
+  const imageEast = second.imageX - first.imageX;
+  const imageNorth = -(second.imageY - first.imageY) / drawingAspect;
+  const imageFractionDistance = Math.hypot(imageEast, imageNorth);
+  const mapDistance = Math.hypot(mapEast, mapNorth);
+  if (imageFractionDistance < 0.03 || mapDistance < 2) throw new Error("De twee registratiepunten liggen te dicht bij elkaar.");
+  const mapBearing = Math.atan2(mapEast, mapNorth) * 180 / Math.PI;
+  const imageBearing = Math.atan2(imageEast, imageNorth) * 180 / Math.PI;
+  const rotationDegrees = ((mapBearing - imageBearing + 540) % 360) - 180;
+  const widthMeters = mapDistance / imageFractionDistance;
+  const offsetEast = (first.imageX - 0.5) * widthMeters;
+  const offsetNorth = (0.5 - first.imageY) * widthMeters / drawingAspect;
+  const theta = rotationDegrees * Math.PI / 180;
+  const rotatedEast = offsetEast * Math.cos(theta) + offsetNorth * Math.sin(theta);
+  const rotatedNorth = -offsetEast * Math.sin(theta) + offsetNorth * Math.cos(theta);
+  const centerLonLat = rdToWgs84(firstRd[0] - rotatedEast, firstRd[1] - rotatedNorth);
+  return { center: { lat: centerLonLat[1], lon: centerLonLat[0] }, widthMeters, rotationDegrees };
+}
+
 function solveLinear(matrix: number[][], vector: number[]): number[] {
   const n = vector.length;
   const augmented = matrix.map((row, i) => [...row, vector[i]]);
@@ -140,4 +167,3 @@ export function solvePlanarCamera(points: ControlPoint[], siteLon: number, siteL
     cameraRd: [siteRd[0] + center[0], siteRd[1] + center[1], groundElevation + center[2]], pointErrors: errors,
   };
 }
-

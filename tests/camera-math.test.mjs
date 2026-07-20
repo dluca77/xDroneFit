@@ -1,6 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rdToWgs84, solvePlanarCamera, wgs84ToRd } from "../app/cameraMath.ts";
+import { rdToWgs84, solvePlanarCamera, solveTwoPointDrawingRegistration, wgs84ToRd } from "../app/cameraMath.ts";
+
+test("recovers situation drawing position, scale and rotation from two points", () => {
+  const centerWgs = { lon: 6.426162461, lat: 52.282539407 };
+  const centerRd = wgs84ToRd(centerWgs.lon, centerWgs.lat);
+  const width = 200;
+  const aspect = 2;
+  const rotation = 30;
+  const theta = rotation * Math.PI / 180;
+  const toWorld = ([imageX, imageY]) => {
+    const east = (imageX - 0.5) * width;
+    const north = (0.5 - imageY) * width / aspect;
+    const rotatedEast = east * Math.cos(theta) + north * Math.sin(theta);
+    const rotatedNorth = -east * Math.sin(theta) + north * Math.cos(theta);
+    const lonLat = rdToWgs84(centerRd[0] + rotatedEast, centerRd[1] + rotatedNorth);
+    return { imageX, imageY, lon: lonLat[0], lat: lonLat[1] };
+  };
+  const solution = solveTwoPointDrawingRegistration(toWorld([0.2, 0.25]), toWorld([0.82, 0.76]), aspect);
+  assert.ok(Math.abs(solution.widthMeters - width) < 0.002);
+  assert.ok(Math.abs(solution.rotationDegrees - rotation) < 0.002);
+  const solvedCenter = wgs84ToRd(solution.center.lon, solution.center.lat);
+  assert.ok(Math.hypot(solvedCenter[0] - centerRd[0], solvedCenter[1] - centerRd[1]) < 0.002);
+});
 
 test("recovers a known camera pose from six planar control points", () => {
   const site = { lon: 6.426162461, lat: 52.282539407 };
@@ -26,4 +48,3 @@ test("recovers a known camera pose from six planar control points", () => {
   assert.ok(solution.rmsPixels < 0.001);
   solution.cameraLocalRd.forEach((value, index) => assert.ok(Math.abs(value - expectedCenter[index]) < 0.002));
 });
-
