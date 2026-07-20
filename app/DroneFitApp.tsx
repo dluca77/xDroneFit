@@ -5,7 +5,7 @@ import * as exifr from "exifr";
 import JSZip from "jszip";
 import "leaflet/dist/leaflet.css";
 import type { ProjectRecord } from "./ProjectPortal";
-import { solvePlanarCamera, solveExifCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint } from "./cameraMath";
+import { solvePlanarCamera, solveExifCamera, solveVanishingPointCamera, solveTwoPointDrawingRegistration, wgs84ToRd, rdToWgs84, type CameraSolution, type ControlPoint, type ImagePoint } from "./cameraMath";
 
 type SitePosition = { lat: number; lon: number };
 type AddressResult = { id: string; label: string; lat: number; lon: number; kind: string };
@@ -129,6 +129,10 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [placingControlPoint, setPlacingControlPoint] = useState(false);
   const [pendingControlId, setPendingControlId] = useState<string | null>(null);
   const [cameraSolution, setCameraSolution] = useState<CameraSolution | null>(saved.cameraSolution || null);
+  const [vpGroup1, setVpGroup1] = useState<ImagePoint[]>(saved.vpGroup1 || []);
+  const [vpGroup2, setVpGroup2] = useState<ImagePoint[]>(saved.vpGroup2 || []);
+  const [placingVpGroup, setPlacingVpGroup] = useState<1 | 2 | null>(null);
+  const placingVpGroupRef = useRef<1 | 2 | null>(null);
   const exifCamera = useMemo(() => {
     if (!drone || drone.latitude == null || drone.longitude == null || !drone.width || !drone.height) return null;
     try {
@@ -595,6 +599,51 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
     setNotice("Referentiepunt gekoppeld. Voeg verspreid over het terrein nog punten toe.");
   }
 
+  function handleVanishingPhotoClick(event: React.MouseEvent<HTMLDivElement>) {
+    const group = placingVpGroupRef.current;
+    if (!group) return;
+    const image = event.currentTarget.querySelector("img");
+    if (!image) return;
+    const rect = image.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
+    const point: ImagePoint = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+    const setGroup = group === 1 ? setVpGroup1 : setVpGroup2;
+    setGroup((current) => {
+      if (current.length >= 4) return current;
+      const next = [...current, point];
+      if (next.length >= 4) { placingVpGroupRef.current = null; setPlacingVpGroup(null); }
+      return next;
+    });
+    setCameraSolution(null);
+    const count = (group === 1 ? vpGroup1.length : vpGroup2.length) + 1;
+    setNotice(count >= 4 ? `Lijngroep ${group} compleet.` : `Punt ${count} van 4 geplaatst voor lijngroep ${group}.`);
+  }
+
+  function solveVanishingCamera() {
+    if (!drone?.width || !drone.height || !drone.latitude || !drone.longitude) {
+      setNotice("Upload eerst de dronefoto met GPS-gegevens.");
+      return;
+    }
+    if (vpGroup1.length < 4 || vpGroup2.length < 4) {
+      setNotice("Plaats eerst twee volledige lijnparen (4 punten per groep).");
+      return;
+    }
+    try {
+      const toPixels = (points: ImagePoint[]): [ImagePoint, ImagePoint, ImagePoint, ImagePoint] =>
+        points.map((p) => ({ x: p.x * (drone.width as number), y: p.y * (drone.height as number) })) as [ImagePoint, ImagePoint, ImagePoint, ImagePoint];
+      const solution = solveVanishingPointCamera(
+        toPixels(vpGroup1), toPixels(vpGroup2), drone.width, drone.height,
+        { latitude: drone.latitude, longitude: drone.longitude, relativeAltitude: drone.relativeAltitude },
+        site.lon, site.lat,
+      );
+      setCameraSolution(solution);
+      setNotice("Camera berekend uit de hulplijnen. Controleer de kijkrichting op de kaart.");
+    } catch (error) {
+      setCameraSolution(null);
+      setNotice(error instanceof Error ? error.message : "Camera kon niet worden berekend uit de hulplijnen.");
+    }
+  }
+
   function solveCamera() {
     if (!drone?.width || !drone.height || !drone.focalLength || !drone.focalLength35mm) {
       setNotice("Voor de berekening ontbreken beeldformaat of lensgegevens in de DJI-foto.");
@@ -627,7 +676,8 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   async function exportProject() {
     const solution = effectiveCameraSolution;
     if (!solution) { setNotice("Upload eerst een dronefoto met GPS- en gimbalgegevens."); return; }
-    const sensorWidth = drone?.focalLength && drone.focalLength35mm ? (drone.focalLength * 36) / drone.focalLength35mm : null;
+    const sensorWidth = solution.sensorWidthMm;
+    const focalLengthMm = drone?.width ? (sensorWidth * solution.focalPixels) / drone.width : null;
     const siteRd = wgs84ToRd(site.lon, site.lat);
     const baseName = projectName.trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "project";
     const photoFileName = drone ? `${baseName}-drone-foto.jpg` : null;
@@ -649,7 +699,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         latitude: drone.latitude, longitude: drone.longitude,
         relativeAltitude: drone.relativeAltitude, absoluteAltitude: drone.absoluteAltitude,
         gimbalYaw: drone.gimbalYaw, gimbalPitch: drone.gimbalPitch, gimbalRoll: drone.gimbalRoll,
-        flightYaw: drone.flightYaw, focalLengthMm: drone.focalLength, focalLength35mm: drone.focalLength35mm,
+        flightYaw: drone.flightYaw, focalLengthMm: focalLengthMm, focalLength35mm: drone.focalLength35mm,
         estimatedSensorWidthMm: sensorWidth, cameraMake: drone.cameraMake, cameraModel: drone.cameraModel, capturedAt: drone.capturedAt,
       } : null,
       buildings: buildings.map((building) => {
@@ -759,14 +809,33 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
             </div>)}</div>}
           </section>
           <section className={`tool-card calibration-card ${collapsedSteps.camera ? "collapsed" : ""}`}>
-            <div className="card-heading"><span>05</span><div><h2>Camera</h2><p>Automatisch uit DJI-metadata. Puntmatching is optioneel voor extra precisie.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /><CollapseButton collapsed={collapsedSteps.camera} label="Camera-match" onToggle={() => toggleStep("camera")} /></div>
+            <div className="card-heading"><span>05</span><div><h2>Camera</h2><p>Teken twee haakse lijnparen op de foto (zoals fSpy) voor de exacte kijkrichting.</p></div><LayerEye shown={layerVisibility.references} label="Referentiepunten" onToggle={() => setLayerVisibility((current) => ({ ...current, references: !current.references }))} /><CollapseButton collapsed={collapsedSteps.camera} label="Camera-match" onToggle={() => toggleStep("camera")} /></div>
             {!drone && <p className="calibration-help">Upload eerst de originele DJI-foto.</p>}
+            {drone && <div className={`vp-photo-editor ${placingVpGroup ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} onClick={handleVanishingPhotoClick} role="button" tabIndex={placingVpGroup ? 0 : -1} aria-label="Dronefoto voor hulplijnen">
+              <img src={drone.previewUrl} alt="DJI-dronefoto voor vluchtpuntlijnen" onLoad={() => setPhotoLoadFailed(false)} onError={() => setPhotoLoadFailed(true)} />
+              <svg className="vp-overlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+                {vpGroup1.length >= 2 && <line x1={vpGroup1[0].x * 100} y1={vpGroup1[0].y * 100} x2={vpGroup1[1].x * 100} y2={vpGroup1[1].y * 100} className="vp-line vp-line-1" />}
+                {vpGroup1.length >= 4 && <line x1={vpGroup1[2].x * 100} y1={vpGroup1[2].y * 100} x2={vpGroup1[3].x * 100} y2={vpGroup1[3].y * 100} className="vp-line vp-line-1" />}
+                {vpGroup2.length >= 2 && <line x1={vpGroup2[0].x * 100} y1={vpGroup2[0].y * 100} x2={vpGroup2[1].x * 100} y2={vpGroup2[1].y * 100} className="vp-line vp-line-2" />}
+                {vpGroup2.length >= 4 && <line x1={vpGroup2[2].x * 100} y1={vpGroup2[2].y * 100} x2={vpGroup2[3].x * 100} y2={vpGroup2[3].y * 100} className="vp-line vp-line-2" />}
+              </svg>
+              {vpGroup1.map((point, index) => <span key={`g1-${index}`} className="vp-point vp-point-1" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} />)}
+              {vpGroup2.map((point, index) => <span key={`g2-${index}`} className="vp-point vp-point-2" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} />)}
+              {photoLoadFailed && <div className="photo-recovery"><strong>Voorvertoning ontbreekt</strong><small>Klik hierboven bij DJI-dronefoto en selecteer één keer opnieuw het originele bestand.</small></div>}
+              {placingVpGroup && !photoLoadFailed && <b>Klik het volgende punt van lijngroep {placingVpGroup}</b>}
+            </div>}
+            {drone && <div className="vp-controls">
+              <button className={placingVpGroup === 1 ? "primary-button" : "secondary-button"} disabled={photoLoadFailed} onClick={() => { const next = placingVpGroup === 1 ? null : 1; placingVpGroupRef.current = next; setPlacingVpGroup(next); if (next) setVpGroup1([]); }}>{vpGroup1.length >= 4 ? "Lijngroep 1 opnieuw" : `Lijngroep 1 (${vpGroup1.length}/4)`}</button>
+              <button className={placingVpGroup === 2 ? "primary-button" : "secondary-button"} disabled={photoLoadFailed} onClick={() => { const next = placingVpGroup === 2 ? null : 2; placingVpGroupRef.current = next; setPlacingVpGroup(next); if (next) setVpGroup2([]); }}>{vpGroup2.length >= 4 ? "Lijngroep 2 opnieuw" : `Lijngroep 2 (${vpGroup2.length}/4)`}</button>
+            </div>}
+            {drone && <p className="calibration-help">Kies twee stel evenwijdige lijnen die in werkelijkheid haaks op elkaar staan (bijv. twee dakranden van een hoek). Groep 1 (rood): twee lijnen langs de ene richting. Groep 2 (blauw): twee lijnen langs de loodrechte richting.</p>}
+            {drone && <button className="primary-button solve-button" onClick={solveVanishingCamera} disabled={vpGroup1.length < 4 || vpGroup2.length < 4}>Bereken camera uit hulplijnen</button>}
             {drone && <div className={`quality-card ${cameraSolution ? "excellent" : "usable"}`}>
-              <span>CAMERABRON</span><strong>{cameraSolution ? "Puntmatching" : "EXIF-metadata"}</strong>
-              <p>{cameraSolution ? "Verfijnd met handmatig gekoppelde grondpunten." : "Positie, hoogte en kijkrichting rechtstreeks uit de dronefoto. Exporteer en verfijn de camera zo nodig visueel in Blender met de achtergrondfoto."}</p>
+              <span>CAMERABRON</span><strong>{cameraSolution?.mode === "vanishing-points" ? "Vluchtpuntlijnen" : cameraSolution?.mode === "planar-homography" ? "Puntmatching" : "EXIF-metadata"}</strong>
+              <p>{cameraSolution?.mode === "vanishing-points" ? "Kijkrichting en beeldhoek berekend uit de hulplijnen op de foto." : cameraSolution?.mode === "planar-homography" ? "Verfijnd met handmatig gekoppelde grondpunten." : "Positie, hoogte en kijkrichting rechtstreeks uit de dronefoto. Teken hulplijnen voor een nauwkeurigere kijkrichting."}</p>
             </div>}
             {drone && <details className="advanced-matching">
-              <summary>Optioneel: precisie verbeteren met puntmatching</summary>
+              <summary>Alternatief: precisie verbeteren met kaart-puntmatching</summary>
               <div className={`photo-matcher ${pendingControlId ? "is-picking" : ""} ${photoLoadFailed ? "photo-missing" : ""}`} ref={photoMatchRef} onClick={handlePhotoPoint} role="button" tabIndex={pendingControlId && !photoLoadFailed ? 0 : -1} aria-label="Dronefoto voor referentiepunten">
                 <img src={drone.previewUrl} alt="DJI-dronefoto voor camerakalibratie" onLoad={() => setPhotoLoadFailed(false)} onError={() => setPhotoLoadFailed(true)} />
                 {controlPoints.filter((point) => point.imageX != null && point.imageY != null).map((point) => <span key={point.id} style={{ left: `${(point.imageX as number) / (drone.width || 1) * 100}%`, top: `${(point.imageY as number) / (drone.height || 1) * 100}%` }}>{controlPoints.findIndex((item) => item.id === point.id) + 1}</span>)}
