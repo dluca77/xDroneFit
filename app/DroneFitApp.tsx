@@ -11,6 +11,7 @@ type AddressResult = { id: string; label: string; lat: number; lon: number; kind
 type BuildingBlock = { id: string; typeName: string; lat: number; lon: number; rotation: number; elevation: number };
 type DrawingControlPoint = { id: string; imageX: number; imageY: number; lat: number | null; lon: number | null };
 type LayerVisibility = { project: boolean; drawing: boolean; drone: boolean; buildings: boolean; references: boolean };
+type LayerKey = keyof LayerVisibility;
 type DroneData = {
   fileName: string; previewUrl: string;
   assetRevision?: number;
@@ -23,6 +24,14 @@ type DroneData = {
 };
 
 const INITIAL_SITE: SitePosition = { lat: 52.282539407, lon: 6.426162461 };
+const DEFAULT_LAYER_VISIBILITY: LayerVisibility = { project: true, drawing: true, drone: true, buildings: true, references: true };
+const MAP_LAYERS: ReadonlyArray<{ key: LayerKey; label: string }> = [
+  { key: "project", label: "Projectanker" },
+  { key: "drawing", label: "Situatiekaart" },
+  { key: "drone", label: "Drone & kijksector" },
+  { key: "buildings", label: "Woningen" },
+  { key: "references", label: "Referentiepunten" },
+];
 
 function readDjiAttribute(raw: string, name: string): number | null {
   const match = raw.match(new RegExp(`drone-dji:${name}="([+-]?[0-9.]+)"`));
@@ -102,7 +111,7 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
   const [placingControlPoint, setPlacingControlPoint] = useState(false);
   const [pendingControlId, setPendingControlId] = useState<string | null>(null);
   const [cameraSolution, setCameraSolution] = useState<CameraSolution | null>(saved.cameraSolution || null);
-  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(saved.layerVisibility || { project: true, drawing: true, drone: true, buildings: true, references: true });
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({ ...DEFAULT_LAYER_VISIBILITY, ...(saved.layerVisibility || {}) });
   const placingBuildingRef = useRef(false);
   const buildingTypeRef = useRef("Tweekapper 1");
   const placingControlPointRef = useRef(false);
@@ -658,6 +667,18 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
         </aside>
         <section className="map-panel">
           <div ref={mapElement} className="map" aria-label="Interactieve projectkaart" />
+          <div className="map-layer-panel" aria-label="Kaartlagen">
+            <strong>Kaartlagen</strong>
+            {MAP_LAYERS.map(({ key, label }) => <button
+              type="button"
+              key={key}
+              data-testid={`layer-${key}`}
+              className={layerVisibility[key] ? "visible" : "hidden"}
+              aria-label={`${label} ${layerVisibility[key] ? "verbergen" : "tonen"}`}
+              aria-pressed={layerVisibility[key]}
+              onClick={() => setLayerVisibility((current) => ({ ...current, [key]: !current[key] }))}
+            ><i aria-hidden="true" /><span>{label}</span><small>{layerVisibility[key] ? "Zichtbaar" : "Verborgen"}</small></button>)}
+          </div>
           {pendingDrawingMapId && <div className="map-pick-banner drawing-pick"><span>{drawingControlPoints.findIndex((point) => point.id === pendingDrawingMapId) + 1}</span><div><b>Koppel het situatiepunt</b><small>Klik exact hetzelfde herkenbare punt op de luchtfoto.</small></div></div>}
           {placingControlPoint && <div className="map-pick-banner"><span>1</span><div><b>Kies een referentiepunt</b><small>Klik bijvoorbeeld op een hoek van een wegmarkering, putdeksel of erfgrens.</small></div></div>}
           <div className="address-search">
