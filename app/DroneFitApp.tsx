@@ -43,6 +43,16 @@ function destination(lat: number, lon: number, bearing: number, meters: number):
   return [(phi2 * 180) / Math.PI, (lambda2 * 180) / Math.PI];
 }
 
+function bearingBetween(from: [number, number], to: [number, number]): number {
+  const phi1 = from[0] * Math.PI / 180;
+  const phi2 = to[0] * Math.PI / 180;
+  const deltaLambda = (to[1] - from[1]) * Math.PI / 180;
+  const y = Math.sin(deltaLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda);
+  const degrees = Math.atan2(y, x) * 180 / Math.PI;
+  return ((degrees + 540) % 360) - 180;
+}
+
 function formatNumber(value: number | null, digits = 2) {
   return value == null ? "—" : value.toFixed(digits);
 }
@@ -224,17 +234,49 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
       const solvedDown = solvedForward ? Math.asin(Math.max(-1, Math.min(1, -solvedForward[2]))) * 180 / Math.PI : null;
       const downAngle = Math.max(8, Math.min(89, solvedDown ?? -(drone.gimbalPitch ?? -45)));
       const centerDistance = Math.min(500, altitude / Math.tan(downAngle * Math.PI / 180));
+      const footprint = (cameraPosition: [number, number], target: [number, number], viewYaw: number, distance: number) => {
+        const halfWidth = Math.tan(horizontalFov * Math.PI / 360) * Math.max(distance, altitude);
+        return [cameraPosition, destination(target[0], target[1], viewYaw - 90, halfWidth), destination(target[0], target[1], viewYaw + 90, halfWidth)];
+      };
       const tip = destination(position[0], position[1], yaw, centerDistance);
-      const halfWidth = Math.tan(horizontalFov * Math.PI / 360) * Math.max(centerDistance, altitude);
-      const left = destination(tip[0], tip[1], yaw - 90, halfWidth);
-      const right = destination(tip[0], tip[1], yaw + 90, halfWidth);
-      L.polygon([position, left, right], { color: "#0f6f67", weight: 2, fillColor: "#3bd0c3", fillOpacity: 0.16 }).addTo(layer);
+      const viewPolygon = L.polygon(footprint(position, tip, yaw, centerDistance), { color: "#0f6f67", weight: 2, fillColor: "#3bd0c3", fillOpacity: 0.16 }).addTo(layer);
+      const directionLine = L.polyline([position, tip], { color: "#0f6f67", weight: 2, dashArray: "5 7", opacity: 0.85 }).addTo(layer);
+      const targetIcon = L.divIcon({ className: "camera-target-pin", html: "<span><i></i></span>", iconSize: [38, 38], iconAnchor: [19, 19] });
+      const targetMarker = L.marker(tip, { icon: targetIcon, draggable: true, zIndexOffset: 800 })
+        .bindTooltip("Kijkpunt · versleep", { permanent: true, direction: "top", offset: [0, -18] }).addTo(layer);
+      targetMarker.on("drag", (event: any) => {
+        const target = event.target.getLatLng();
+        const targetPosition: [number, number] = [target.lat, target.lng];
+        const distance = Math.max(1, mapInstance.current?.distance(position, targetPosition) ?? centerDistance);
+        const nextYaw = bearingBetween(position, targetPosition);
+        viewPolygon.setLatLngs(footprint(position, targetPosition, nextYaw, distance));
+        directionLine.setLatLngs([position, targetPosition]);
+      });
+      targetMarker.on("dragend", (event: any) => {
+        const target = event.target.getLatLng();
+        const targetPosition: [number, number] = [target.lat, target.lng];
+        const distance = Math.max(1, mapInstance.current?.distance(position, targetPosition) ?? centerDistance);
+        const nextYaw = bearingBetween(position, targetPosition);
+        const nextPitch = -Math.atan2(altitude, distance) * 180 / Math.PI;
+        setDrone((current) => current ? { ...current, latitude: position[0], longitude: position[1], gimbalYaw: nextYaw, gimbalPitch: nextPitch } : current);
+        setCameraSolution(null);
+        setNotice(`Kijkrichting aangepast naar ${nextYaw.toFixed(1)}° en pitch ${nextPitch.toFixed(1)}°.`);
+      });
       const droneIcon = L.divIcon({ className: "drone-pin", html: "<span>✦</span>", iconSize: [30, 30], iconAnchor: [15, 15] });
-      const droneMarker = L.marker(position, { icon: droneIcon, draggable: !cameraSolution })
-        .bindTooltip("Drone · versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
+      const droneMarker = L.marker(position, { icon: droneIcon, draggable: true })
+        .bindTooltip(cameraSolution ? "Berekende camera · versleep voor handmatige correctie" : "Drone · versleep om te corrigeren", { permanent: true, direction: "bottom", offset: [0, 12] }).addTo(layer);
+      droneMarker.on("drag", (event: any) => {
+        const point = event.target.getLatLng();
+        const cameraPosition: [number, number] = [point.lat, point.lng];
+        const movedTarget = destination(cameraPosition[0], cameraPosition[1], yaw, centerDistance);
+        viewPolygon.setLatLngs(footprint(cameraPosition, movedTarget, yaw, centerDistance));
+        directionLine.setLatLngs([cameraPosition, movedTarget]);
+        targetMarker.setLatLng(movedTarget);
+      });
       droneMarker.on("dragend", (event: any) => {
         const point = event.target.getLatLng();
-        setDrone((current) => current ? { ...current, latitude: point.lat, longitude: point.lng } : current);
+        setDrone((current) => current ? { ...current, latitude: point.lat, longitude: point.lng, gimbalYaw: yaw, gimbalPitch: -downAngle } : current);
+        setCameraSolution(null);
         setNotice("Dronepositie handmatig gecorrigeerd.");
       });
     }
@@ -459,10 +501,11 @@ export default function DroneFitApp({ project, onBack }: { project: ProjectRecor
                 <div><span>Gimbal</span><b>{formatNumber(drone.gimbalYaw)}° / {formatNumber(drone.gimbalPitch)}°</b></div>
                 <div><span>Lens</span><b>{formatNumber(drone.focalLength)} mm</b></div>
               </div>
+              <div className="camera-map-hint"><i /><span><b>Stel de drone op de kaart af</b>Versleep de drone voor de vliegpositie en het richtpunt voor de kijkrichting.</span></div>
               <div className="slider-stack camera-controls">
-                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => setDrone({ ...drone, gimbalYaw: Number(e.target.value) })} /></label>
-                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => setDrone({ ...drone, gimbalPitch: Number(e.target.value) })} /></label>
-                <label><span>Vlieghoogte <b>{formatNumber(drone.relativeAltitude)} m</b></span><input type="range" min="1" max="200" step="0.1" value={drone.relativeAltitude ?? 30} onChange={(e) => setDrone({ ...drone, relativeAltitude: Number(e.target.value) })} /></label>
+                <label><span>Kijkrichting <b>{formatNumber(drone.gimbalYaw)}°</b></span><input type="range" min="-180" max="180" step="0.1" value={drone.gimbalYaw ?? 0} onChange={(e) => { setDrone({ ...drone, gimbalYaw: Number(e.target.value) }); setCameraSolution(null); }} /></label>
+                <label><span>Gimbal pitch <b>{formatNumber(drone.gimbalPitch)}°</b></span><input type="range" min="-90" max="10" step="0.1" value={drone.gimbalPitch ?? 0} onChange={(e) => { setDrone({ ...drone, gimbalPitch: Number(e.target.value) }); setCameraSolution(null); }} /></label>
+                <label><span>Vlieghoogte <b>{formatNumber(drone.relativeAltitude)} m</b></span><input type="range" min="1" max="200" step="0.1" value={drone.relativeAltitude ?? 30} onChange={(e) => { setDrone({ ...drone, relativeAltitude: Number(e.target.value) }); setCameraSolution(null); }} /></label>
               </div>
             </>}
           </section>
